@@ -32,6 +32,10 @@ import type { Params, RenderEnv } from '../types'
  */
 
 export const FIELD_PARAMS: Array<ParamSpec> = [
+  // The seed lives in `params` like everything else so a generator layer is
+  // just `{ kind, params }` — the inspector, sanitizer, and edit actions then
+  // treat it exactly like an effect layer with no special-casing anywhere.
+  { kind: 'seed', key: 'seed', label: 'Seed', default: 'field' },
   {
     kind: 'select',
     key: 'field',
@@ -539,6 +543,7 @@ export function randomizeField(seed: string, palette: Array<string>): Params {
   const field = rng.pick(['fbm', 'warp', 'warp', 'ridged', 'flow'])
 
   return {
+    seed,
     field,
     scale: roundParam(rng.range(1, field === 'flow' ? 4 : 6), 1),
     octaves: rng.int(3, 7),

@@ -56,9 +56,14 @@ export function isFullRange(mask: ToneMask): boolean {
   return mask.low <= 0 && mask.high >= 1
 }
 
-export interface Layer {
+/**
+ * Everything in the stack is a layer, and every layer carries the same
+ * controls. A generator is not a privileged "source" that effects hang off —
+ * it is a layer that happens to make its own pixels, which is what lets two
+ * generators blend or an effect sit between them.
+ */
+export interface LayerBase {
   id: string
-  type: EffectType
   name?: string
   enabled: boolean
   opacity: number
@@ -67,24 +72,39 @@ export interface Layer {
   params: Params
 }
 
-export interface GeneratorSource {
-  type: 'generator'
+export interface GeneratorLayer extends LayerBase {
+  kind: 'generator'
   generator: 'field'
-  seed: string
-  params: Params
 }
 
-export interface ImageSource {
-  type: 'image'
+export interface ImageLayer extends LayerBase {
+  kind: 'image'
   /**
-   * Imported bitmaps deliberately never enter the recipe (ADR Decision 6): a
-   * shared recipe reopens with a missing source rather than carrying pixels.
-   * This is only a display name for the UI.
+   * Key into the session asset registry, never the pixels themselves (ADR
+   * Decision 6). A shared recipe reopens with the layer intact and its pixels
+   * missing, which is inspectable; an embedded bitmap would be neither small
+   * nor safe.
    */
-  name: string
+  asset: string
 }
 
-export type Source = GeneratorSource | ImageSource
+export interface EffectLayer extends LayerBase {
+  kind: 'effect'
+  type: EffectType
+}
+
+/**
+ * Source layers own their coverage, effect layers inherit it. That distinction
+ * is the one thing the compositor cannot infer, so it is carried by `kind`
+ * rather than guessed from the pixels (see `compositeInto`).
+ */
+export type Layer = GeneratorLayer | ImageLayer | EffectLayer
+
+export type LayerKind = Layer['kind']
+
+export function isSourceLayer(layer: Layer): layer is GeneratorLayer | ImageLayer {
+  return layer.kind !== 'effect'
+}
 
 export interface CanvasSize {
   width: number
@@ -92,9 +112,17 @@ export interface CanvasSize {
 }
 
 export interface Recipe {
-  version: 1
-  source: Source
+  version: 2
   canvas: CanvasSize
+  /**
+   * What sits under the bottom layer. The accumulator is opaque from the first
+   * pixel on purpose: every effect in the registry transforms RGB and ignores
+   * alpha, so a transparent ground would have them quantizing and blurring
+   * pixels that are not there — black haloes around glyphs, dither in the
+   * empty margins. Compositing stays correct because source layers blend by
+   * their own alpha; it is only the *ground* that is never transparent.
+   */
+  background: string
   layers: Array<Layer>
 }
 

@@ -4,11 +4,22 @@ import {
   FIELD_DEFAULTS,
   randomizeField,
 } from './generators/field'
+import { IMAGE_DEFAULTS, IMAGE_PARAMS } from './layers/image'
 import { PALETTES } from './palettes'
 import { createRng, randomSeed } from './rng'
 import { roundParam, sanitizeParams } from './params'
-import { BLEND_MODES, NO_MASK } from './types'
-import type { BlendMode, EffectType, Layer, Recipe, ToneMask } from './types'
+import { BLEND_MODES, NO_MASK, isSourceLayer } from './types'
+import type {
+  BlendMode,
+  EffectLayer,
+  EffectType,
+  GeneratorLayer,
+  ImageLayer,
+  Layer,
+  LayerBase,
+  Recipe,
+  ToneMask,
+} from './types'
 
 export interface SizePreset {
   id: string
@@ -39,16 +50,47 @@ export function createLayerId(): string {
   return `layer_${Date.now().toString(36)}${layerCounter.toString(36)}`
 }
 
-export function createLayer(type: EffectType): Layer {
+/** The controls every layer carries, whatever it renders. */
+function layerBase(): Omit<LayerBase, 'params'> {
   return {
     id: createLayerId(),
-    type,
     enabled: true,
     opacity: 1,
     blendMode: 'normal',
     mask: { ...NO_MASK },
-    params: effectDefaults(type),
   }
+}
+
+export function createEffectLayer(type: EffectType): EffectLayer {
+  return { ...layerBase(), kind: 'effect', type, params: effectDefaults(type) }
+}
+
+export function createGeneratorLayer(seed = randomSeed()): GeneratorLayer {
+  return {
+    ...layerBase(),
+    kind: 'generator',
+    generator: 'field',
+    params: { ...FIELD_DEFAULTS(), seed },
+  }
+}
+
+export function createImageLayer(asset: string, name: string): ImageLayer {
+  return {
+    ...layerBase(),
+    kind: 'image',
+    asset,
+    name: name.trim().slice(0, 48) || undefined,
+    params: IMAGE_DEFAULTS(),
+  }
+}
+
+/** Fresh defaults for a layer, without disturbing what it renders. */
+export function layerDefaults(layer: Layer): Layer['params'] {
+  if (layer.kind === 'effect') return effectDefaults(layer.type)
+  if (layer.kind === 'image') return IMAGE_DEFAULTS()
+  // The seed is the layer's identity, not a setting — resetting the controls
+  // should not silently reroll the image underneath them.
+  return { ...FIELD_DEFAULTS(), seed: layer.params.seed }
 }
 
 /** Clamp an untrusted mask into a usable band. */
@@ -78,27 +120,29 @@ export function sanitizeMask(input: unknown): ToneMask {
  * rather than a bare generator.
  */
 export function createDefaultRecipe(): Recipe {
-  const seed = randomSeed()
   return {
-    version: 1,
-    source: {
-      type: 'generator',
-      generator: 'field',
-      seed,
-      params: FIELD_DEFAULTS(),
-    },
+    version: 2,
     canvas: { width: 1080, height: 1350 },
+    background: DEFAULT_BACKGROUND,
     layers: [
-      { ...createLayer('posterize'), opacity: 1 },
-      { ...createLayer('dither'), opacity: 0.9 },
+      createGeneratorLayer(),
+      { ...createEffectLayer('posterize'), opacity: 1 },
+      { ...createEffectLayer('dither'), opacity: 0.9 },
     ],
   }
 }
 
-function paletteFromRecipe(recipe: Recipe) {
-  const palette =
-    recipe.source.type === 'generator' ? recipe.source.params.palette : null
-  return Array.isArray(palette) ? palette : ['#050505', '#f5f5f5', '#0057ff']
+export const DEFAULT_BACKGROUND = '#000000'
+
+const FALLBACK_PALETTE = ['#050505', '#f5f5f5', '#0057ff']
+
+/** The stack's colourway: the lowest generator's palette wins. */
+export function paletteFromRecipe(recipe: Recipe): Array<string> {
+  for (const layer of recipe.layers) {
+    if (layer.kind !== 'generator') continue
+    if (Array.isArray(layer.params.palette)) return layer.params.palette
+  }
+  return FALLBACK_PALETTE
 }
 
 /**
@@ -110,11 +154,11 @@ export function randomizeFxStack(current: Recipe): Recipe {
   const rng = createRng(`${seed}:remix`)
   const palette = paletteFromRecipe(current)
 
-  const layers: Array<Layer> = []
+  const layers: Array<EffectLayer> = []
 
   // Posterize almost always, since it establishes the palette.
   if (rng.bool(0.85)) {
-    const layer = createLayer('posterize')
+    const layer = createEffectLayer('posterize')
     layer.params = {
       ...layer.params,
       mode: rng.bool(0.75) ? 'duotone' : 'rgb',
@@ -130,7 +174,7 @@ export function randomizeFxStack(current: Recipe): Recipe {
   // Pixelate occasionally, and always before the dither so the dither has
   // flat cells to work across rather than the other way round.
   if (rng.bool(0.25)) {
-    const layer = createLayer('pixelate')
+    const layer = createEffectLayer('pixelate')
     layer.params = {
       ...layer.params,
       size: rng.int(3, 16),
@@ -141,7 +185,7 @@ export function randomizeFxStack(current: Recipe): Recipe {
   }
 
   if (rng.bool(0.7)) {
-    const layer = createLayer('dither')
+    const layer = createEffectLayer('dither')
     layer.opacity = roundParam(rng.range(0.7, 1))
     layer.params = {
       ...layer.params,
@@ -171,7 +215,7 @@ export function randomizeFxStack(current: Recipe): Recipe {
   // ASCII and dither both quantize tone, so stacking them muddies each other.
   // Offer ASCII only when the dither did not land.
   if (layers.every((entry) => entry.type !== 'dither') && rng.bool(0.5)) {
-    const layer = createLayer('ascii')
+    const layer = createEffectLayer('ascii')
     layer.params = {
       ...layer.params,
       ramp: rng.pick(['classic', 'blocks', 'shades', 'minimal', 'dots']),
@@ -187,7 +231,7 @@ export function randomizeFxStack(current: Recipe): Recipe {
   }
 
   if (rng.bool(0.45)) {
-    const layer = createLayer('channel-drift')
+    const layer = createEffectLayer('channel-drift')
     layer.opacity = roundParam(rng.range(0.5, 1))
     layer.blendMode = rng.bool(0.7) ? 'normal' : rng.pick(BLEND_MODES)
     layer.params = {
@@ -206,35 +250,44 @@ export function randomizeFxStack(current: Recipe): Recipe {
   }
 
   // Never hand back an empty stack.
-  if (layers.length === 0) layers.push(createLayer('posterize'))
+  if (layers.length === 0) layers.push(createEffectLayer('posterize'))
 
-  return { ...current, layers }
+  // Source layers are the composition; only the treatment is rerolled. Their
+  // order is preserved and the new effects go on top, which is where a stack
+  // built by hand would have put them.
+  return { ...current, layers: [...current.layers.filter(isSourceLayer), ...layers] }
 }
 
 /**
- * Remix: reseed the source and pick a fresh but coherent stack.
+ * Remix: reseed the generators and pick a fresh but coherent stack.
  */
 export function remixRecipe(current: Recipe): Recipe {
   const seed = randomSeed()
   const rng = createRng(`${seed}:remix`)
   const palette = rng.pick(PALETTES).colors
-  const withStack = randomizeFxStack({
-    ...current,
-    source:
-      current.source.type === 'image'
-        ? current.source
-        : {
-            type: 'generator',
-            generator: 'field',
-            seed,
-            params: randomizeField(seed, palette),
-          },
-  })
 
-  return {
-    ...withStack,
-    source: withStack.source,
-  }
+  const sources = current.layers.filter(isSourceLayer)
+  const generators = sources.filter((layer) => layer.kind === 'generator')
+
+  const reseeded = sources.map((layer, index) =>
+    layer.kind === 'generator'
+      ? {
+          ...layer,
+          // Distinct seeds per generator, so stacked fields do not come out as
+          // the same image twice; one shared palette, so they read as one work.
+          params: randomizeField(`${seed}:${index}`, palette),
+        }
+      : layer,
+  )
+
+  // A recipe with nothing to treat gets a generator, so remix always produces
+  // an image rather than a bare background.
+  const layers =
+    generators.length === 0 && sources.length === 0
+      ? [{ ...createGeneratorLayer(seed), params: randomizeField(seed, palette) }]
+      : reseeded
+
+  return randomizeFxStack({ ...current, layers })
 }
 
 /**
@@ -245,64 +298,124 @@ export function remixRecipe(current: Recipe): Recipe {
 export function sanitizeRecipe(input: unknown): Recipe | null {
   if (typeof input !== 'object' || input === null) return null
   const raw = input as Record<string, unknown>
-  if (raw.version !== 1) return null
+  if (raw.version !== 1 && raw.version !== 2) return null
 
   const canvas = (raw.canvas ?? {}) as Record<string, unknown>
   const width = typeof canvas.width === 'number' ? canvas.width : 1080
   const height = typeof canvas.height === 'number' ? canvas.height : 1350
 
-  const rawSource = (raw.source ?? {}) as Record<string, unknown>
-  const source: Recipe['source'] =
-    rawSource.type === 'image'
-      ? {
-          type: 'image',
-          name: typeof rawSource.name === 'string' ? rawSource.name : 'image',
-        }
-      : {
-          type: 'generator',
-          generator: 'field',
-          seed:
-            typeof rawSource.seed === 'string' ? rawSource.seed : randomSeed(),
-          params: sanitizeParams(FIELD_PARAMS, rawSource.params),
-        }
-
   const rawLayers = Array.isArray(raw.layers) ? raw.layers : []
-  const layers: Array<Layer> = []
+  const layers = rawLayers.flatMap((entry) => {
+    const layer = sanitizeLayer(entry)
+    return layer ? [layer] : []
+  })
 
-  for (const entry of rawLayers) {
-    if (typeof entry !== 'object' || entry === null) continue
-    const layer = entry as Record<string, unknown>
-    const type = layer.type as EffectType
-    if (!EFFECT_ORDER.includes(type)) continue
-
-    layers.push({
-      id: typeof layer.id === 'string' ? layer.id : createLayerId(),
-      name:
-        typeof layer.name === 'string' && layer.name.trim().length > 0
-          ? layer.name.trim().slice(0, 48)
-          : undefined,
-      type,
-      enabled: layer.enabled !== false,
-      opacity:
-        typeof layer.opacity === 'number'
-          ? Math.max(0, Math.min(1, layer.opacity))
-          : 1,
-      blendMode: BLEND_MODES.includes(layer.blendMode as BlendMode)
-        ? (layer.blendMode as BlendMode)
-        : 'normal',
-      mask: sanitizeMask(layer.mask),
-      params: sanitizeParams(EFFECTS[type].params, layer.params),
-    })
-  }
+  // A v1 recipe's source becomes the bottom layer. Everything above it already
+  // sanitizes as an effect layer, because v1 layers were effect layers.
+  if (raw.version === 1) layers.unshift(migrateSource(raw.source))
 
   return {
-    version: 1,
-    source,
+    version: 2,
     canvas: {
       width: Math.max(16, Math.min(8192, Math.round(width))),
       height: Math.max(16, Math.min(8192, Math.round(height))),
     },
+    background: isHexColor(raw.background)
+      ? raw.background
+      : DEFAULT_BACKGROUND,
     layers,
+  }
+}
+
+/** The handle a v1 import migrates onto — there was only ever one. */
+export const IMPORTED_ASSET = 'imported'
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value)
+}
+
+function migrateSource(input: unknown): Layer {
+  const raw = (
+    typeof input === 'object' && input !== null ? input : {}
+  ) as Record<string, unknown>
+
+  if (raw.type === 'image') {
+    const name = typeof raw.name === 'string' ? raw.name : 'image'
+    // v1 drew every import cover-fit and centred, which is exactly what the
+    // default placement params describe — so the migration is not an
+    // approximation, it renders the same pixels.
+    return { ...createImageLayer(IMPORTED_ASSET, name), name }
+  }
+
+  const layer = createGeneratorLayer()
+  return {
+    ...layer,
+    name: 'Field',
+    // v1 kept the seed beside the params; v2 keeps it in them.
+    params: sanitizeParams(FIELD_PARAMS, {
+      ...(typeof raw.params === 'object' && raw.params !== null
+        ? raw.params
+        : {}),
+      seed: typeof raw.seed === 'string' ? raw.seed : layer.params.seed,
+    }),
+  }
+}
+
+/**
+ * One untrusted stack entry.
+ *
+ * `kind` is inferred when absent so a v1 layer — which had a `type` and no
+ * kind — sanitizes through the same path as a v2 one.
+ */
+function sanitizeLayer(input: unknown): Layer | null {
+  if (typeof input !== 'object' || input === null) return null
+  const raw = input as Record<string, unknown>
+
+  const type = raw.type as EffectType
+  const kind =
+    raw.kind === 'generator' || raw.kind === 'image' || raw.kind === 'effect'
+      ? raw.kind
+      : EFFECT_ORDER.includes(type)
+        ? 'effect'
+        : null
+  if (!kind) return null
+  if (kind === 'effect' && !EFFECT_ORDER.includes(type)) return null
+
+  const base: Omit<LayerBase, 'params'> = {
+    id: typeof raw.id === 'string' ? raw.id : createLayerId(),
+    name:
+      typeof raw.name === 'string' && raw.name.trim().length > 0
+        ? raw.name.trim().slice(0, 48)
+        : undefined,
+    enabled: raw.enabled !== false,
+    opacity:
+      typeof raw.opacity === 'number'
+        ? Math.max(0, Math.min(1, raw.opacity))
+        : 1,
+    blendMode: BLEND_MODES.includes(raw.blendMode as BlendMode)
+      ? (raw.blendMode as BlendMode)
+      : 'normal',
+    mask: sanitizeMask(raw.mask),
+  }
+
+  if (kind === 'effect') {
+    return { ...base, kind, type, params: sanitizeParams(EFFECTS[type].params, raw.params) }
+  }
+
+  if (kind === 'image') {
+    return {
+      ...base,
+      kind,
+      asset: typeof raw.asset === 'string' ? raw.asset : IMPORTED_ASSET,
+      params: sanitizeParams(IMAGE_PARAMS, raw.params),
+    }
+  }
+
+  return {
+    ...base,
+    kind,
+    generator: 'field',
+    params: sanitizeParams(FIELD_PARAMS, raw.params),
   }
 }
 

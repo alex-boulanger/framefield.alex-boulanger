@@ -1,12 +1,15 @@
 import { create } from 'zustand'
 import {
   createDefaultRecipe,
-  createLayer,
+  createEffectLayer,
+  createGeneratorLayer,
+  createImageLayer,
+  createLayerId,
+  layerDefaults,
   remixRecipe,
   randomizeFxStack,
   SIZE_PRESETS,
 } from '#/renderer/recipe'
-import { effectDefaults } from '#/renderer/effects'
 import { randomizeField } from '#/renderer/generators/field'
 import { randomSeed } from '#/renderer/rng'
 import { NO_MASK } from '#/renderer/types'
@@ -33,8 +36,15 @@ export interface LabState {
   past: Array<Recipe>
   future: Array<Recipe>
   selectedLayerId: string | null
-  /** Object URL of the imported image, or null for generator sources. */
-  imageUrl: string | null
+  /**
+   * Object URLs for imported images, by asset handle.
+   *
+   * Deliberately outside the recipe *and* outside history. An image layer
+   * carries only its handle, so undoing the layer that introduced an import
+   * has to be able to find those pixels again when it is redone — which means
+   * the registry only ever grows, for the life of the session.
+   */
+  assets: Record<string, string>
 
   setRecipe: (recipe: Recipe) => void
   hydrateRecipe: (recipe: Recipe) => void
@@ -42,17 +52,12 @@ export interface LabState {
   undo: () => void
   redo: () => void
 
-  setSeed: (seed: string) => void
-  randomizeSeed: () => void
-  setSourceParam: (key: string, value: ParamValue) => void
-  randomizeSource: () => void
   randomizeFxStack: () => void
   remix: () => void
 
-  setImage: (url: string, name: string) => void
-  clearImage: () => void
-
-  addLayer: (type: EffectType) => void
+  addEffectLayer: (type: EffectType) => void
+  addGeneratorLayer: () => void
+  addImageLayer: (url: string, name: string) => void
   removeLayer: (id: string) => void
   duplicateLayer: (id: string) => void
   toggleLayer: (id: string) => void
@@ -64,6 +69,10 @@ export interface LabState {
   setLayerMask: (id: string, mask: Partial<ToneMask>) => void
   setLayerName: (id: string, name: string) => void
   resetLayer: (id: string) => void
+  /** Reroll a generator layer's seed, keeping its parameters. */
+  reseedLayer: (id: string) => void
+  /** Reroll a generator layer's parameters, keeping the stack's palette. */
+  randomizeLayer: (id: string) => void
 }
 
 const initialRecipe = createDefaultRecipe()
@@ -91,6 +100,16 @@ function samePalette(a: unknown, b: unknown) {
   )
 }
 
+/**
+ * Recolouring a generator carries its treatments with it.
+ *
+ * Two limits, both learned the hard way. Only effect layers follow: a second
+ * generator is a compositional choice with its own colourway, and recolouring
+ * one field must not silently repaint the other. And only effects that still
+ * match the *old* palette follow, so a layer the user deliberately set stays
+ * set. Without any of this, a preset loses its colour scheme the moment the
+ * field is recoloured.
+ */
 function syncInheritedLayerPalettes(
   layers: Array<Layer>,
   previousPalette: unknown,
@@ -99,6 +118,7 @@ function syncInheritedLayerPalettes(
   if (!Array.isArray(nextPalette)) return layers
 
   return layers.map((layer) =>
+    layer.kind === 'effect' &&
     samePalette(layer.params.palette, previousPalette)
       ? {
           ...layer,
@@ -106,6 +126,15 @@ function syncInheritedLayerPalettes(
         }
       : layer,
   )
+}
+
+/** Add to the top of the stack and select it, whatever the layer renders. */
+function appendLayer(state: LabState, layer: Layer) {
+  return {
+    ...pushHistory(state),
+    recipe: { ...state.recipe, layers: [...state.recipe.layers, layer] },
+    selectedLayerId: layer.id,
+  }
 }
 
 /** Immutable layer edit — keeps recipe identity changing only when it must. */
@@ -122,12 +151,12 @@ function mapLayer(
   }
 }
 
-export const useLab = create<LabState>((set, get) => ({
+export const useLab = create<LabState>((set) => ({
   recipe: initialRecipe,
   past: [],
   future: [],
   selectedLayerId: initialRecipe.layers[0]?.id ?? null,
-  imageUrl: null,
+  assets: {},
 
   setRecipe: (recipe) =>
     set((state) => ({
@@ -174,66 +203,6 @@ export const useLab = create<LabState>((set, get) => ({
       }
     }),
 
-  setSeed: (seed) =>
-    set((state) => ({
-      ...pushHistory(state),
-      recipe:
-        state.recipe.source.type === 'generator'
-          ? {
-              ...state.recipe,
-              source: { ...state.recipe.source, seed },
-            }
-          : state.recipe,
-    })),
-
-  randomizeSeed: () => get().setSeed(randomSeed()),
-
-  setSourceParam: (key, value) =>
-    set((state) => ({
-      ...pushHistory(state),
-      recipe:
-        state.recipe.source.type === 'generator'
-          ? {
-              ...state.recipe,
-              source: {
-                ...state.recipe.source,
-                params: { ...state.recipe.source.params, [key]: value },
-              },
-              layers:
-                key === 'palette'
-                  ? syncInheritedLayerPalettes(
-                      state.recipe.layers,
-                      state.recipe.source.params.palette,
-                      value,
-                    )
-                  : state.recipe.layers,
-            }
-          : state.recipe,
-    })),
-
-  randomizeSource: () =>
-    set((state) => {
-      if (state.recipe.source.type !== 'generator') return state
-      const seed = randomSeed()
-      const palette = state.recipe.source.params.palette
-      return {
-        ...pushHistory(state),
-        recipe: {
-          ...state.recipe,
-          source: {
-            ...state.recipe.source,
-            seed,
-            params: randomizeField(
-              seed,
-              Array.isArray(palette)
-                ? palette
-                : ['#050505', '#f5f5f5', '#0057ff'],
-            ),
-          },
-        },
-      }
-    }),
-
   randomizeFxStack: () =>
     set((state) => {
       const recipe = randomizeFxStack(state.recipe)
@@ -254,44 +223,17 @@ export const useLab = create<LabState>((set, get) => ({
       }
     }),
 
-  setImage: (url, name) =>
-    set((state) => {
-      // Release the previous object URL; leaking these across imports is a
-      // real memory cost with large photos.
-      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl)
-      return {
-        ...pushHistory(state),
-        imageUrl: url,
-        recipe: { ...state.recipe, source: { type: 'image', name } },
-      }
-    }),
+  addEffectLayer: (type) => set((state) => appendLayer(state, createEffectLayer(type))),
 
-  clearImage: () =>
-    set((state) => {
-      if (state.imageUrl) URL.revokeObjectURL(state.imageUrl)
-      const seed = randomSeed()
-      return {
-        ...pushHistory(state),
-        imageUrl: null,
-        recipe: {
-          ...state.recipe,
-          source: {
-            type: 'generator',
-            generator: 'field',
-            seed,
-            params: randomizeField(seed, ['#050505', '#f5f5f5', '#0057ff']),
-          },
-        },
-      }
-    }),
+  addGeneratorLayer: () =>
+    set((state) => appendLayer(state, createGeneratorLayer())),
 
-  addLayer: (type) =>
+  addImageLayer: (url, name) =>
     set((state) => {
-      const layer = createLayer(type)
+      const asset = `asset_${createLayerId()}`
       return {
-        ...pushHistory(state),
-        recipe: { ...state.recipe, layers: [...state.recipe.layers, layer] },
-        selectedLayerId: layer.id,
+        ...appendLayer(state, createImageLayer(asset, name)),
+        assets: { ...state.assets, [asset]: url },
       }
     }),
 
@@ -315,7 +257,7 @@ export const useLab = create<LabState>((set, get) => ({
       const source = state.recipe.layers[index]
       const copy: Layer = {
         ...source,
-        id: createLayer(source.type).id,
+        id: createLayerId(),
         params: { ...source.params },
       }
       const layers = [...state.recipe.layers]
@@ -351,13 +293,28 @@ export const useLab = create<LabState>((set, get) => ({
     }),
 
   setLayerParam: (id, key, value) =>
-    set((state) => ({
-      ...pushHistory(state),
-      recipe: mapLayer(state.recipe, id, (layer) => ({
+    set((state) => {
+      const edited = state.recipe.layers.find((layer) => layer.id === id)
+      const recipe = mapLayer(state.recipe, id, (layer) => ({
         ...layer,
         params: { ...layer.params, [key]: value },
-      })),
-    })),
+      }))
+
+      return {
+        ...pushHistory(state),
+        recipe:
+          key === 'palette' && edited?.kind === 'generator'
+            ? {
+                ...recipe,
+                layers: syncInheritedLayerPalettes(
+                  recipe.layers,
+                  edited.params.palette,
+                  value,
+                ),
+              }
+            : recipe,
+      }
+    }),
 
   setLayerOpacity: (id, opacity) =>
     set((state) => ({
@@ -412,8 +369,32 @@ export const useLab = create<LabState>((set, get) => ({
         opacity: 1,
         blendMode: 'normal',
         mask: { ...NO_MASK },
-        params: effectDefaults(layer.type),
+        params: layerDefaults(layer),
       })),
+    })),
+
+  reseedLayer: (id) =>
+    set((state) => ({
+      ...pushHistory(state),
+      recipe: mapLayer(state.recipe, id, (layer) =>
+        layer.kind === 'generator'
+          ? { ...layer, params: { ...layer.params, seed: randomSeed() } }
+          : layer,
+      ),
+    })),
+
+  randomizeLayer: (id) =>
+    set((state) => ({
+      ...pushHistory(state),
+      recipe: mapLayer(state.recipe, id, (layer) => {
+        if (layer.kind !== 'generator') return layer
+        // Keep the layer's own palette: rerolling the shape of a field should
+        // not also change the colours the rest of the stack inherited.
+        const palette = Array.isArray(layer.params.palette)
+          ? layer.params.palette
+          : ['#050505', '#f5f5f5', '#0057ff']
+        return { ...layer, params: randomizeField(randomSeed(), palette) }
+      }),
     })),
 }))
 

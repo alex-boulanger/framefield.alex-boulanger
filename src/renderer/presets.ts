@@ -1,5 +1,6 @@
 import { effectDefaults } from './effects'
 import { FIELD_DEFAULTS } from './generators/field'
+import { DEFAULT_BACKGROUND } from './recipe'
 import { NO_MASK } from './types'
 import type { EffectType, Layer, Params, Recipe, ToneMask } from './types'
 
@@ -270,7 +271,7 @@ export function recipeFromPreset(
 ): Recipe {
   const sourcePalette = preset.source.palette
 
-  const layers: Array<Layer> = preset.layers.map((entry) => {
+  const effects: Array<Layer> = preset.layers.map((entry) => {
     counter += 1
     const defaults = effectDefaults(entry.type)
 
@@ -290,6 +291,7 @@ export function recipeFromPreset(
 
     return {
       id: `preset_${preset.id}_${counter}`,
+      kind: 'effect',
       type: entry.type,
       enabled: true,
       opacity: entry.opacity ?? 1,
@@ -299,15 +301,22 @@ export function recipeFromPreset(
     }
   })
 
+  const generator: Layer = {
+    id: `preset_${preset.id}_field`,
+    kind: 'generator',
+    generator: 'field',
+    name: 'Field',
+    enabled: true,
+    opacity: 1,
+    blendMode: 'normal',
+    mask: { ...NO_MASK },
+    params: { ...FIELD_DEFAULTS(), ...preset.source, seed: preset.seed },
+  }
+
   return {
-    version: 1,
-    source: {
-      type: 'generator',
-      generator: 'field',
-      seed: preset.seed,
-      params: { ...FIELD_DEFAULTS(), ...preset.source },
-    },
+    version: 2,
     canvas: { ...canvas },
-    layers,
+    background: DEFAULT_BACKGROUND,
+    layers: [generator, ...effects],
   }
 }

@@ -1,22 +1,29 @@
 import { toImageData } from './buffer'
-import { renderRecipe, renderSource, renderToPngBlob } from './renderRecipe'
-import type { PixelBuffer } from './buffer'
+import {
+  commonPrefix,
+  renderStack,
+  renderToPngBlob,
+  stackKeys,
+} from './renderRecipe'
+import type { Checkpoint, RenderAssets } from './renderRecipe'
 import type { Recipe } from './types'
+
+/** Object URLs by asset handle. The worker decodes them itself. */
+type AssetUrls = Record<string, string>
 
 interface PreviewRequest {
   kind: 'preview'
   id: number
   recipe: Recipe
   scale: number
-  sourceKey: string
-  imageUrl: string | null
+  assets?: AssetUrls
 }
 
 interface ExportRequest {
   kind: 'export'
   id: number
   recipe: Recipe
-  imageUrl: string | null
+  assets?: AssetUrls
 }
 
 type RenderWorkerRequest = PreviewRequest | ExportRequest
@@ -41,34 +48,52 @@ type RenderWorkerResponse =
       error: string
     }
 
-let sourceCache: { key: string; image: PixelBuffer } | null = null
-let bitmapCache: { url: string; bitmap: ImageBitmap } | null = null
+const bitmaps = new Map<string, ImageBitmap>()
 
-async function bitmapFor(url: string | null): Promise<ImageBitmap | null> {
-  if (!url) {
-    bitmapCache?.bitmap.close()
-    bitmapCache = null
-    return null
-  }
+/**
+ * Decode each asset once and keep it.
+ *
+ * Keyed by URL rather than handle so re-importing the same file under a new
+ * handle still costs one decode, and a handle pointed at new bytes is never
+ * served the old ones.
+ */
+async function decodeAssets(urls: AssetUrls): Promise<RenderAssets> {
+  const assets: RenderAssets = {}
 
-  if (bitmapCache?.url === url) return bitmapCache.bitmap
+  await Promise.all(
+    Object.entries(urls).map(async ([handle, url]) => {
+      let bitmap = bitmaps.get(url)
+      if (!bitmap) {
+        const blob = await fetch(url).then((response) => response.blob())
+        bitmap = await createImageBitmap(blob)
+        bitmaps.set(url, bitmap)
+      }
+      assets[handle] = bitmap
+    }),
+  )
 
-  bitmapCache?.bitmap.close()
-  const blob = await fetch(url).then((response) => response.blob())
-  const bitmap = await createImageBitmap(blob)
-  bitmapCache = { url, bitmap }
-  return bitmap
+  return assets
 }
+
+/**
+ * The accumulator part-way up the stack, kept between renders.
+ *
+ * This is what the old source cache became. Editing one layer's params only
+ * invalidates that layer and everything above it, so a slider drag high in the
+ * stack never re-runs the generators underneath — which is the difference
+ * between a responsive preview and a 300ms one.
+ */
+let cache: { keys: Array<string>; checkpoint: Checkpoint } | null = null
 
 self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
   const request = event.data
 
   try {
     const start = performance.now()
-    const bitmap = await bitmapFor(request.imageUrl)
+    const assets = await decodeAssets(request.assets ?? {})
 
     if (request.kind === 'export') {
-      const blob = await renderToPngBlob({ recipe: request.recipe, bitmap })
+      const blob = await renderToPngBlob({ recipe: request.recipe, assets })
       self.postMessage({
         kind: 'export',
         id: request.id,
@@ -78,31 +103,28 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       return
     }
 
-    if (sourceCache?.key !== request.sourceKey) {
-      sourceCache = {
-        key: request.sourceKey,
-        image: renderSource({
-          recipe: request.recipe,
-          bitmap,
-          scale: request.scale,
-        }),
-      }
-    }
+    // Asset identity has to be part of the key: swapping the file behind a
+    // handle changes the pixels without changing the recipe.
+    const keys = stackKeys(request.recipe, request.assets ?? {})
+    const unchanged = cache ? commonPrefix(cache.keys, keys) : 0
+    const resume =
+      cache && cache.checkpoint.index <= unchanged ? cache.checkpoint : null
 
-    const image = toImageData(
-      renderRecipe({
-        recipe: request.recipe,
-        bitmap,
-        scale: request.scale,
-        sourceImage: sourceCache.image,
-      }),
-    )
+    const result = renderStack({
+      recipe: request.recipe,
+      assets,
+      scale: request.scale,
+      resume,
+      captureAt: unchanged,
+    })
+
+    if (result.captured) cache = { keys, checkpoint: result.captured }
 
     self.postMessage({
       kind: 'preview',
       id: request.id,
       scale: request.scale,
-      image,
+      image: toImageData(result.buffer),
       renderMs: performance.now() - start,
     } satisfies RenderWorkerResponse)
   } catch (error) {

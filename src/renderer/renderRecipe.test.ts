@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { renderRecipe, renderSource } from './renderRecipe'
-import { createLayer } from './recipe'
-import type { Layer, Params, Recipe } from './types'
+import { renderRecipe, renderStack } from './renderRecipe'
+import {
+  createEffectLayer,
+  createGeneratorLayer,
+  createImageLayer,
+} from './recipe'
+import type { EffectType, Layer, LayerBase, Params, Recipe } from './types'
 import { createBuffer } from './buffer'
 import type { PixelBuffer } from './buffer'
 import { gradient, hasUniformCells, meanLuminance, pixel } from '#/test/helpers'
@@ -9,33 +13,33 @@ import { gradient, hasUniformCells, meanLuminance, pixel } from '#/test/helpers'
 /**
  * Pipeline tests.
  *
- * `renderRecipe` takes a pre-rendered `sourceImage`, so supplying one bypasses
- * the generator's canvas entirely and the whole layer loop — ordering, enable
- * flags, opacity, blending — becomes testable in plain node.
+ * Resuming from index 0 hands the renderer a ready-made accumulator, which
+ * bypasses every canvas in the pipeline and leaves the layer loop — ordering,
+ * enable flags, opacity, blending — testable in plain node.
  */
 
 function recipe(layers: Array<Layer>, size = 64): Recipe {
   return {
-    version: 1,
-    source: { type: 'image', name: 'test' },
+    version: 2,
     canvas: { width: size, height: size },
+    background: '#000000',
     layers,
   }
 }
 
 function layer(
-  type: Layer['type'],
+  type: EffectType,
   params: Params = {},
-  overrides: Partial<Layer> = {},
+  overrides: Partial<LayerBase> = {},
 ): Layer {
-  const created = createLayer(type)
+  const created = createEffectLayer(type)
   return { ...created, ...overrides, params: { ...created.params, ...params } }
 }
 
 describe('renderRecipe', () => {
   it('returns the source untouched for an empty stack', () => {
     const source = gradient(64, 64)
-    const result = renderRecipe({ recipe: recipe([]), sourceImage: source })
+    const result = renderRecipe({ recipe: recipe([]), resume: { index: 0, buffer: source } })
     expect(Array.from(result.data)).toEqual(Array.from(source.data))
   })
 
@@ -44,7 +48,7 @@ describe('renderRecipe', () => {
     const before = Array.from(source.data)
     renderRecipe({
       recipe: recipe([layer('posterize', { levels: 2 })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     expect(Array.from(source.data)).toEqual(before)
   })
@@ -53,11 +57,11 @@ describe('renderRecipe', () => {
     const source = gradient(64, 64)
     const enabled = renderRecipe({
       recipe: recipe([layer('posterize', { levels: 2 })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     const disabled = renderRecipe({
       recipe: recipe([layer('posterize', { levels: 2 }, { enabled: false })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
 
     expect(Array.from(disabled.data)).toEqual(Array.from(source.data))
@@ -68,7 +72,7 @@ describe('renderRecipe', () => {
     const source = gradient(64, 64)
     const result = renderRecipe({
       recipe: recipe([layer('posterize', { levels: 2 }, { opacity: 0 })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     expect(Array.from(result.data)).toEqual(Array.from(source.data))
   })
@@ -79,11 +83,11 @@ describe('renderRecipe', () => {
 
     const full = renderRecipe({
       recipe: recipe([layer('posterize', params)]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     const half = renderRecipe({
       recipe: recipe([layer('posterize', params, { opacity: 0.5 })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
 
     // The half-strength result must sit strictly between the two extremes.
@@ -105,11 +109,11 @@ describe('renderRecipe', () => {
 
     const a = renderRecipe({
       recipe: recipe([dither, drift]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     const b = renderRecipe({
       recipe: recipe([drift, dither]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
 
     expect(Array.from(a.data)).not.toEqual(Array.from(b.data))
@@ -125,11 +129,11 @@ describe('renderRecipe', () => {
 
     const a = renderRecipe({
       recipe: recipe([posterize, drift]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     const b = renderRecipe({
       recipe: recipe([drift, posterize]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
 
     expect(Array.from(a.data)).toEqual(Array.from(b.data))
@@ -140,7 +144,7 @@ describe('renderRecipe', () => {
     // falls back to the source path and comes out at the recipe's size.
     const result = renderRecipe({
       recipe: recipe([], 64),
-      sourceImage: gradient(32, 32),
+      resume: { index: 0, buffer: gradient(32, 32) },
     })
     expect([result.width, result.height]).toEqual([64, 64])
   })
@@ -153,18 +157,18 @@ describe('renderRecipe', () => {
     ]
     const a = renderRecipe({
       recipe: recipe(layers),
-      sourceImage: gradient(64, 64),
+      resume: { index: 0, buffer: gradient(64, 64) },
     })
     const b = renderRecipe({
       recipe: recipe(layers),
-      sourceImage: gradient(64, 64),
+      resume: { index: 0, buffer: gradient(64, 64) },
     })
     expect(Array.from(a.data)).toEqual(Array.from(b.data))
   })
 })
 
-describe('renderSource', () => {
-  it('draws imported sources without canvas smoothing', () => {
+describe('image layers', () => {
+  it('draws imported pixels without canvas smoothing', () => {
     const originalDocument = globalThis.document
     let smoothingAtDraw: boolean | null = null
 
@@ -183,14 +187,9 @@ describe('renderSource', () => {
     } as unknown as Document
 
     try {
-      renderSource({
-        recipe: {
-          version: 1,
-          source: { type: 'image', name: 'pixel-art.png' },
-          canvas: { width: 8, height: 8 },
-          layers: [],
-        },
-        bitmap: { width: 4, height: 4 } as ImageBitmap,
+      renderRecipe({
+        recipe: recipe([imageLayer('photo')], 8),
+        assets: { photo: { width: 4, height: 4 } as ImageBitmap },
       })
     } finally {
       globalThis.document = originalDocument
@@ -215,7 +214,7 @@ describe('scale fidelity', () => {
     const side = Math.round(SIZE * scale)
     return renderRecipe({
       recipe: recipe(layers, SIZE),
-      sourceImage: gradient(side, side),
+      resume: { index: 0, buffer: gradient(side, side) },
       scale,
     })
   }
@@ -285,7 +284,7 @@ describe('scale fidelity', () => {
       const side = Math.round(SIZE * scale)
       return renderRecipe({
         recipe: recipe(layers, SIZE),
-        sourceImage: step(side, side, side / 2),
+        resume: { index: 0, buffer: step(side, side, side / 2) },
         scale,
       })
     }
@@ -312,7 +311,7 @@ describe('scale fidelity', () => {
     const correct = renderAt(0.5, layers)
     const unscaled = renderRecipe({
       recipe: recipe(layers, SIZE / 2),
-      sourceImage: gradient(SIZE / 2, SIZE / 2),
+      resume: { index: 0, buffer: gradient(SIZE / 2, SIZE / 2) },
       scale: 1,
     })
     expect(Array.from(correct.data)).not.toEqual(Array.from(unscaled.data))
@@ -342,3 +341,203 @@ function findRedEdge(buffer: PixelBuffer): number {
   }
   return -1
 }
+
+/* -------------------------------------------------------------------------
+ * Unified stack semantics
+ * ---------------------------------------------------------------------- */
+
+function generatorLayer(
+  seed: string,
+  overrides: Partial<LayerBase> = {},
+): Layer {
+  const created = createGeneratorLayer(seed)
+  return { ...created, ...overrides }
+}
+
+function imageLayer(
+  asset: string,
+  params: Params = {},
+  overrides: Partial<LayerBase> = {},
+): Layer {
+  const created = createImageLayer(asset, asset)
+  return { ...created, ...overrides, params: { ...created.params, ...params } }
+}
+
+/**
+ * Stand in for the one canvas the pipeline still touches.
+ *
+ * Image layers are the only source that cannot be rendered in node, so the
+ * bitmap they would have drawn is supplied directly — which is what makes
+ * coverage, the thing source compositing turns on, testable at all.
+ */
+function withFakeCanvas<T>(image: ImageData, run: () => T): T {
+  const original = globalThis.document
+  globalThis.document = {
+    createElement: () => ({
+      width: 0,
+      height: 0,
+      getContext: () => ({
+        imageSmoothingEnabled: true,
+        drawImage() {},
+        getImageData: () => image,
+      }),
+    }),
+  } as unknown as Document
+
+  try {
+    return run()
+  } finally {
+    globalThis.document = original
+  }
+}
+
+/** RGBA sRGB bytes: opaque white on the left half, transparent on the right. */
+function halfCovered(size: number): ImageData {
+  const data = new Uint8ClampedArray(size * size * 4)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size / 2; x++) {
+      const i = (y * size + x) * 4
+      data[i] = 255
+      data[i + 1] = 255
+      data[i + 2] = 255
+      data[i + 3] = 255
+    }
+  }
+  return new ImageData(data, size, size)
+}
+
+describe('source layers', () => {
+  it('composites by coverage rather than replacing the stack', () => {
+    const beneath = gradient(16, 16)
+    const result = withFakeCanvas(halfCovered(16), () =>
+      renderRecipe({
+        recipe: recipe([imageLayer('photo')], 16),
+        assets: { photo: { width: 16, height: 16 } as ImageBitmap },
+        resume: { index: 0, buffer: beneath },
+      }),
+    )
+
+    // Covered half takes the layer's pixels; uncovered half is untouched.
+    expect(pixel(result, 2, 0)[0]).toBeCloseTo(1, 5)
+    expect(pixel(result, 12, 0)).toEqual(pixel(beneath, 12, 0))
+  })
+
+  it('leaves the stack intact when a layer covers nothing', () => {
+    const beneath = gradient(8, 8)
+    const result = withFakeCanvas(new ImageData(8, 8), () =>
+      renderRecipe({
+        recipe: recipe([imageLayer('photo')], 8),
+        assets: { photo: { width: 8, height: 8 } as ImageBitmap },
+        resume: { index: 0, buffer: beneath },
+      }),
+    )
+    expect(Array.from(result.data)).toEqual(Array.from(beneath.data))
+  })
+
+  it('skips an image layer whose asset is missing', () => {
+    const beneath = gradient(8, 8)
+    const result = renderRecipe({
+      recipe: recipe([imageLayer('gone')], 8),
+      resume: { index: 0, buffer: beneath },
+    })
+    expect(Array.from(result.data)).toEqual(Array.from(beneath.data))
+  })
+
+  it('blends one generator over another', () => {
+    const lower = recipe([generatorLayer('a')], 32)
+    const both = recipe(
+      [generatorLayer('a'), generatorLayer('b', { opacity: 0.5 })],
+      32,
+    )
+
+    const alone = renderRecipe({ recipe: lower })
+    const blended = renderRecipe({ recipe: both })
+    expect(Array.from(blended.data)).not.toEqual(Array.from(alone.data))
+  })
+
+  it('skips a disabled source layer', () => {
+    const withSource = recipe([generatorLayer('a')], 32)
+    const disabled = recipe([generatorLayer('a', { enabled: false })], 32)
+
+    const on = renderRecipe({ recipe: withSource })
+    const off = renderRecipe({ recipe: disabled })
+    const ground = renderRecipe({ recipe: recipe([], 32) })
+
+    expect(Array.from(off.data)).toEqual(Array.from(ground.data))
+    expect(Array.from(on.data)).not.toEqual(Array.from(ground.data))
+  })
+
+  it('starts from an opaque ground so nothing renders transparent', () => {
+    const result = renderRecipe({ recipe: recipe([], 8) })
+    for (let i = 3; i < result.data.length; i += 4) {
+      expect(result.data[i]).toBe(1)
+    }
+  })
+})
+
+describe('effect layers as adjustment layers', () => {
+  it('treats everything beneath it, not just the layer below', () => {
+    // Same two sources, same effect — only its position in the stack moves.
+    const treated = recipe(
+      [
+        generatorLayer('a'),
+        layer('posterize', { levels: 2, mode: 'rgb' }),
+        generatorLayer('b', { opacity: 0.5 }),
+      ],
+      32,
+    )
+    const untreated = recipe(
+      [
+        generatorLayer('a'),
+        generatorLayer('b', { opacity: 0.5 }),
+        layer('posterize', { levels: 2, mode: 'rgb' }),
+      ],
+      32,
+    )
+
+    expect(
+      Array.from(renderRecipe({ recipe: treated }).data),
+    ).not.toEqual(Array.from(renderRecipe({ recipe: untreated }).data))
+  })
+
+  it('does not crash at the bottom of the stack', () => {
+    // An effect with nothing beneath it processes the bare ground. Reachable
+    // by dragging, so it must be boring rather than fatal.
+    expect(() =>
+      renderRecipe({
+        recipe: recipe([layer('dither'), generatorLayer('a')], 16),
+      }),
+    ).not.toThrow()
+  })
+})
+
+describe('checkpoints', () => {
+  it('resuming mid-stack matches a render from the ground up', () => {
+    const layers = [
+      generatorLayer('a'),
+      layer('posterize', { levels: 3 }),
+      layer('dither', { mode: 'mono' }),
+    ]
+    const full = renderRecipe({ recipe: recipe(layers, 32) })
+
+    // Capture before the top layer, then resume from it.
+    const first = renderStack({ recipe: recipe(layers, 32), captureAt: 2 })
+    expect(first.captured?.index).toBe(2)
+
+    const resumed = renderStack({
+      recipe: recipe(layers, 32),
+      resume: first.captured,
+    })
+    expect(Array.from(resumed.buffer.data)).toEqual(Array.from(full.data))
+  })
+
+  it('ignores a checkpoint captured at another size', () => {
+    const layers = [generatorLayer('a'), layer('posterize', { levels: 3 })]
+    const small = renderStack({ recipe: recipe(layers, 16), captureAt: 1 })
+    const result = renderStack({
+      recipe: recipe(layers, 32),
+      resume: small.captured,
+    })
+    expect([result.buffer.width, result.buffer.height]).toEqual([32, 32])
+  })
+})

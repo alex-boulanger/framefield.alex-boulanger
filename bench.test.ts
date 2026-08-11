@@ -1,7 +1,7 @@
 import { it } from 'vitest'
 import { writeFileSync } from 'node:fs'
-import { renderRecipe, renderSource } from './src/renderer/renderRecipe'
-import { createDefaultRecipe, createLayer } from './src/renderer/recipe'
+import { renderRecipe, renderStack } from './src/renderer/renderRecipe'
+import { createDefaultRecipe, createEffectLayer } from './src/renderer/recipe'
 import { PRESETS, recipeFromPreset } from './src/renderer/presets'
 import type { EffectType, Layer, Params, Recipe } from './src/renderer/types'
 
@@ -12,7 +12,7 @@ const CANVAS = { width: 1080, height: 1350 }
 const PREVIEW_SCALE = 0.537
 
 function layer(type: EffectType, params: Params = {}): Layer {
-  const created = createLayer(type)
+  const created = createEffectLayer(type)
   return { ...created, params: { ...created.params, ...params } }
 }
 
@@ -43,12 +43,11 @@ it('bench', () => {
   lines.push('--- preview (scale 0.537, ~420k px) ---')
 
   // Source alone, which the viewport memoizes.
-  const source = renderSource({ recipe: defaultRecipe, scale: PREVIEW_SCALE })
-  lines.push(
-    time('source only (warp)', () =>
-      renderSource({ recipe: defaultRecipe, scale: PREVIEW_SCALE }),
-    ),
-  )
+  // The generator is layer 0, so a checkpoint at index 1 is the old "source".
+  const sourceOnly = (recipe: Recipe) =>
+    renderStack({ recipe, scale: PREVIEW_SCALE, captureAt: 1 }).captured!
+  const source = sourceOnly(defaultRecipe)
+  lines.push(time('source only (warp)', () => sourceOnly(defaultRecipe)))
 
   // Effects only — the path a slider drag actually takes.
   lines.push(
@@ -56,18 +55,18 @@ it('bench', () => {
       renderRecipe({
         recipe: defaultRecipe,
         scale: PREVIEW_SCALE,
-        sourceImage: source,
+        resume: source,
       }),
     ),
   )
 
-  const heavySource = renderSource({ recipe: heavy, scale: PREVIEW_SCALE })
+  const heavySource = sourceOnly(heavy)
   lines.push(
     time('heavy stack, cached source', () =>
       renderRecipe({
         recipe: heavy,
         scale: PREVIEW_SCALE,
-        sourceImage: heavySource,
+        resume: heavySource,
       }),
     ),
   )
@@ -96,7 +95,7 @@ it('bench', () => {
     const recipe = withLayers([layer(type)])
     lines.push(
       time(`  ${type}`, () =>
-        renderRecipe({ recipe, scale: PREVIEW_SCALE, sourceImage: source }),
+        renderRecipe({ recipe, scale: PREVIEW_SCALE, resume: source }),
       ),
     )
   }

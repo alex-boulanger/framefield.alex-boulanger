@@ -6,7 +6,7 @@ import { Segmented } from './controls'
 import { Download, Loader2 } from 'lucide-react'
 import type { Recipe } from '#/renderer/types'
 
-function renderExportInWorker(recipe: Recipe, imageUrl: string | null) {
+function renderExportInWorker(recipe: Recipe, assets: Record<string, string>) {
   if (typeof Worker === 'undefined') {
     return Promise.reject(new Error('Worker unavailable'))
   }
@@ -43,20 +43,29 @@ function renderExportInWorker(recipe: Recipe, imageUrl: string | null) {
       reject(new Error(event.message || 'Worker export failed'))
     }
 
-    worker.postMessage({ kind: 'export', id, recipe, imageUrl })
+    worker.postMessage({ kind: 'export', id, recipe, assets })
   })
 }
 
-async function decodeBitmap(imageUrl: string | null) {
-  if (!imageUrl) return null
-  const blob = await fetch(imageUrl).then((response) => response.blob())
-  return createImageBitmap(blob)
+async function decodeAssets(assets: Record<string, string>) {
+  const entries = await Promise.all(
+    Object.entries(assets).map(async ([handle, url]) => {
+      const blob = await fetch(url).then((response) => response.blob())
+      return [handle, await createImageBitmap(blob)] as const
+    }),
+  )
+  return Object.fromEntries(entries)
 }
 
 function downloadBlob(blob: Blob, recipe: Recipe) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  const seed = recipe.source.type === 'generator' ? recipe.source.seed : 'image'
+  // Name the file after the lowest generator's seed: it is the closest thing
+  // a stack has to an identity, and it makes exports of the same artwork sort
+  // together.
+  const generator = recipe.layers.find((layer) => layer.kind === 'generator')
+  const seed =
+    typeof generator?.params.seed === 'string' ? generator.params.seed : 'stack'
   link.href = url
   link.download = `framefield-${seed}-${recipe.canvas.width}x${recipe.canvas.height}.png`
   link.click()
@@ -72,7 +81,7 @@ function downloadBlob(blob: Blob, recipe: Recipe) {
  */
 export function ExportPanel() {
   const recipe = useLab((state) => state.recipe)
-  const imageUrl = useLab((state) => state.imageUrl)
+  const assets = useLab((state) => state.assets)
   const setCanvasSize = useLab((state) => state.setCanvasSize)
 
   const [busy, setBusy] = useState(false)
@@ -109,13 +118,13 @@ export function ExportPanel() {
     try {
       let blob: Blob
       try {
-        blob = await renderExportInWorker(recipe, imageUrl)
+        blob = await renderExportInWorker(recipe, assets)
       } catch {
-        const bitmap = await decodeBitmap(imageUrl)
+        const bitmaps = await decodeAssets(assets)
         try {
-          blob = await renderToPngBlob({ recipe, bitmap })
+          blob = await renderToPngBlob({ recipe, assets: bitmaps })
         } finally {
-          bitmap?.close()
+          for (const bitmap of Object.values(bitmaps)) bitmap.close()
         }
       }
       downloadBlob(blob, recipe)

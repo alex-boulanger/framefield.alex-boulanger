@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { compositeInto, maskWeight } from './blend'
 import { renderRecipe } from './renderRecipe'
-import { createLayer, sanitizeMask, sanitizeRecipe } from './recipe'
+import { createEffectLayer, sanitizeMask, sanitizeRecipe } from './recipe'
 import { isFullRange, NO_MASK } from './types'
 import type { Layer, Params, Recipe } from './types'
 import { createBuffer, luma } from './buffer'
@@ -138,15 +138,15 @@ describe('sanitizeMask', () => {
 describe('masks in the pipeline', () => {
   function recipe(layers: Array<Layer>): Recipe {
     return {
-      version: 1,
-      source: { type: 'image', name: 'test' },
+      version: 2,
       canvas: { width: 64, height: 64 },
+      background: '#000000',
       layers,
     }
   }
 
   function layer(params: Params, mask: Layer['mask']): Layer {
-    const created = createLayer('posterize')
+    const created = createEffectLayer('posterize')
     return {
       ...created,
       mask,
@@ -160,11 +160,11 @@ describe('masks in the pipeline', () => {
 
     const everywhere = renderRecipe({
       recipe: recipe([layer(params, { low: 0, high: 1, softness: 0 })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     const shadowsOnly = renderRecipe({
       recipe: recipe([layer(params, { low: 0, high: 0.25, softness: 0 })]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
 
     expect(Array.from(everywhere.data)).not.toEqual(
@@ -206,7 +206,7 @@ describe('masks in the pipeline', () => {
       recipe: recipe([
         layer({ levels: 2 }, { low: 0, high: 0.1, softness: 0 }),
       ]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     for (let i = 0; i < result.data.length; i += 4) {
       expect(luma(result, i)).toBeCloseTo(luma(source, i), 5)
@@ -220,20 +220,20 @@ describe('masks in the pipeline', () => {
         layer({ levels: 2, mode: 'rgb' }, { low: 0, high: 0.4, softness: 0 }),
         layer({ levels: 3, mode: 'rgb' }, { low: 0.6, high: 1, softness: 0 }),
       ]),
-      sourceImage: source,
+      resume: { index: 0, buffer: source },
     })
     expect(Array.from(stacked.data)).not.toEqual(Array.from(source.data))
   })
 })
 
-describe('createLayer', () => {
+describe('createEffectLayer', () => {
   it('starts with no mask', () => {
-    expect(createLayer('dither').mask).toEqual(NO_MASK)
+    expect(createEffectLayer('dither').mask).toEqual(NO_MASK)
   })
 
   it('gives each layer its own mask object', () => {
-    const a = createLayer('dither')
-    const b = createLayer('dither')
+    const a = createEffectLayer('dither')
+    const b = createEffectLayer('dither')
     a.mask.low = 0.5
     expect(b.mask.low).toBe(0)
   })

@@ -37,9 +37,15 @@ describe('recipeFromPreset', () => {
     '%s builds a valid recipe',
     (_name, preset) => {
       const recipe = recipeFromPreset(preset, CANVAS)
-      expect(recipe.version).toBe(1)
+      expect(recipe.version).toBe(2)
       expect(recipe.canvas).toEqual(CANVAS)
-      expect(recipe.layers.length).toBe(preset.layers.length)
+      // The field is a layer like any other, and it sits at the bottom of the
+      // stack — everything the preset declares is a treatment above it.
+      expect(recipe.layers[0].kind).toBe('generator')
+      expect(recipe.layers.length).toBe(preset.layers.length + 1)
+      expect(recipe.layers.slice(1).map((layer) => layer.kind)).toEqual(
+        preset.layers.map(() => 'effect'),
+      )
     },
   )
 

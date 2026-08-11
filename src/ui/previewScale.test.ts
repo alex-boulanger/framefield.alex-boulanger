@@ -4,9 +4,9 @@ import type { Recipe } from '#/renderer/types'
 
 function recipe(width: number, height: number): Recipe {
   return {
-    version: 1,
-    source: { type: 'generator', generator: 'field', seed: 'test', params: {} },
+    version: 2,
     canvas: { width, height },
+    background: '#000000',
     layers: [],
   }
 }

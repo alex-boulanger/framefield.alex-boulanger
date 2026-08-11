@@ -1,12 +1,16 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLab } from '#/app/store'
-import { putBuffer, renderRecipe, renderSource } from '#/renderer/renderRecipe'
+import {
+  commonPrefix,
+  putBuffer,
+  renderStack,
+  stackKeys,
+} from '#/renderer/renderRecipe'
 import {
   previewRequestScales,
   SETTLED_PREVIEW_DELAY_MS,
 } from './previewScale'
-import type { PixelBuffer } from '#/renderer/buffer'
-import type { Recipe } from '#/renderer/types'
+import type { Checkpoint, RenderAssets } from '#/renderer/renderRecipe'
 import { ImageOff } from 'lucide-react'
 
 /**
@@ -19,39 +23,49 @@ import { ImageOff } from 'lucide-react'
  * until the pass moves into a worker).
  */
 
-/** Decode the imported file once and keep the bitmap out of the store. */
-function useSourceBitmap(imageUrl: string | null, enabled: boolean) {
-  const [bitmap, setBitmap] = useState<ImageBitmap | null>(null)
+/**
+ * Decode imported files once and keep the bitmaps out of the store.
+ *
+ * Only used by the no-worker fallback path — when a worker is available it
+ * does its own decoding, and shipping bitmaps across the boundary on every
+ * frame would cost more than the decode.
+ */
+function useAssetBitmaps(assets: Record<string, string>, enabled: boolean) {
+  const [bitmaps, setBitmaps] = useState<RenderAssets>({})
+  const key = Object.entries(assets).sort().join('|')
 
   useEffect(() => {
-    if (!enabled || !imageUrl) {
-      setBitmap(null)
+    if (!enabled) {
+      setBitmaps({})
       return
     }
 
     let cancelled = false
-    let created: ImageBitmap | null = null
+    const created: Array<ImageBitmap> = []
 
-    fetch(imageUrl)
-      .then((response) => response.blob())
-      .then((blob) => createImageBitmap(blob))
-      .then((result) => {
-        if (cancelled) {
-          result.close()
-          return
-        }
-        created = result
-        setBitmap(result)
+    Promise.all(
+      Object.entries(assets).map(async ([handle, url]) => {
+        const blob = await fetch(url).then((response) => response.blob())
+        const bitmap = await createImageBitmap(blob)
+        created.push(bitmap)
+        return [handle, bitmap] as const
+      }),
+    )
+      .then((entries) => {
+        if (cancelled) return
+        setBitmaps(Object.fromEntries(entries))
       })
-      .catch(() => setBitmap(null))
+      .catch(() => setBitmaps({}))
 
     return () => {
       cancelled = true
-      created?.close()
+      for (const bitmap of created) bitmap.close()
     }
-  }, [enabled, imageUrl])
+    // `key` stands in for the asset map: a new object identity every render
+    // would re-decode every bitmap on every frame.
+  }, [enabled, key])
 
-  return bitmap
+  return bitmaps
 }
 
 /** Track the available box so the preview can size itself to it. */
@@ -88,13 +102,9 @@ type WorkerMessage =
   | { kind: 'export'; id: number; blob: Blob; renderMs: number }
   | { kind: 'error'; id: number; error: string }
 
-function sourceKeyFor(recipe: Recipe, scale: number, imageUrl: string | null) {
-  return `${JSON.stringify(recipe.source)}|${recipe.canvas.width}x${recipe.canvas.height}|${scale.toFixed(4)}|${imageUrl ?? 'none'}`
-}
-
 export function CanvasViewport() {
   const recipe = useLab((state) => state.recipe)
-  const imageUrl = useLab((state) => state.imageUrl)
+  const assets = useLab((state) => state.assets)
 
   const [boxRef, box] = useElementSize<HTMLDivElement>()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -106,9 +116,18 @@ export function CanvasViewport() {
   const [workerReady, setWorkerReady] = useState(false)
   const [renderMs, setRenderMs] = useState(0)
   const [paintedScale, setPaintedScale] = useState(0)
-  const bitmap = useSourceBitmap(imageUrl, !workerReady)
+  const bitmaps = useAssetBitmaps(assets, !workerReady)
 
-  const missingSource = recipe.source.type === 'image' && !bitmap && !imageUrl
+  // Per layer now, not per document: a stack can be half-rendered, with one
+  // import missing and everything else composing normally.
+  const missingSource = useMemo(
+    () =>
+      recipe.layers.some(
+        (layer) =>
+          layer.kind === 'image' && layer.enabled && !assets[layer.asset],
+      ),
+    [recipe.layers, assets],
+  )
 
   const { interactive: interactiveScale, settled: settledScale } =
     previewRequestScales(recipe, box.width, box.height, workerReady)
@@ -172,12 +191,15 @@ export function CanvasViewport() {
   }, [])
 
   /**
-   * Source cache. Effect params change constantly while dragging, but none of
-   * them affect the source — so the generator pass is memoized against the
-   * things that actually do change it. The cache lives here rather than in the
-   * renderer so the renderer stays a pure function of its inputs.
+   * Checkpoint cache for the fallback path. Dragging a slider only invalidates
+   * that layer and the ones above it, so the generators underneath are not
+   * re-run on every frame. Lives here rather than in the renderer so the
+   * renderer stays a pure function of its inputs.
    */
-  const sourceRef = useRef<{ key: string; image: PixelBuffer } | null>(null)
+  const cacheRef = useRef<{
+    keys: Array<string>
+    checkpoint: Checkpoint
+  } | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -197,8 +219,7 @@ export function CanvasViewport() {
           id,
           recipe,
           scale: interactiveScale,
-          sourceKey: sourceKeyFor(recipe, interactiveScale, imageUrl),
-          imageUrl,
+          assets,
         })
 
         if (settledScale > interactiveScale + 0.001) {
@@ -232,8 +253,7 @@ export function CanvasViewport() {
               id: settledId,
               recipe,
               scale: settledScale,
-              sourceKey: sourceKeyFor(recipe, settledScale, imageUrl),
-              imageUrl,
+              assets,
             })
           }, SETTLED_PREVIEW_DELAY_MS)
         }
@@ -241,23 +261,26 @@ export function CanvasViewport() {
       }
 
       const start = performance.now()
-      const sourceKey = sourceKeyFor(recipe, interactiveScale, imageUrl)
 
-      if (sourceRef.current?.key !== sourceKey) {
-        sourceRef.current = {
-          key: sourceKey,
-          image: renderSource({ recipe, bitmap, scale: interactiveScale }),
-        }
-      }
-      const sourceImage = sourceRef.current.image
+      const keys = stackKeys(recipe, assets)
+      const cached = cacheRef.current
+      const unchanged = cached ? commonPrefix(cached.keys, keys) : 0
 
-      const image = renderRecipe({
+      const result = renderStack({
         recipe,
-        bitmap,
+        assets: bitmaps,
         scale: interactiveScale,
-        sourceImage,
+        resume:
+          cached && cached.checkpoint.index <= unchanged
+            ? cached.checkpoint
+            : null,
+        captureAt: unchanged,
       })
-      putBuffer(canvas, image)
+
+      if (result.captured) {
+        cacheRef.current = { keys, checkpoint: result.captured }
+      }
+      putBuffer(canvas, result.buffer)
 
       setPaintedScale(interactiveScale)
       setRenderMs(performance.now() - start)
@@ -269,13 +292,13 @@ export function CanvasViewport() {
     }
   }, [
     recipe,
-    bitmap,
+    bitmaps,
     box.width,
     box.height,
     interactiveScale,
     settledScale,
     workerReady,
-    imageUrl,
+    assets,
   ])
 
   const aspect = recipe.canvas.width / recipe.canvas.height
@@ -310,10 +333,11 @@ export function CanvasViewport() {
           {missingSource && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
               <ImageOff size={20} color="var(--color-faint)" />
-              <p className="ff-label">Source image missing</p>
+              <p className="ff-label">Image layer missing its file</p>
               <p className="ff-value max-w-[24ch] leading-relaxed">
-                This recipe was shared with an imported image. Import one to
-                apply the stack.
+                Imported pixels stay out of the recipe, so a shared or reloaded
+                stack keeps the layer and loses the file. Re-import it to
+                restore the composition.
               </p>
             </div>
           )}

@@ -57,20 +57,29 @@ describe('useLab history', () => {
   })
 })
 
-describe('source palette changes', () => {
+describe('generator palette changes', () => {
+  /** The bottom generator, which is the stack's colourway. */
+  function generatorId() {
+    const layer = useLab
+      .getState()
+      .recipe.layers.find((entry) => entry.kind === 'generator')
+    if (!layer) throw new Error('expected a generator layer')
+    return layer.id
+  }
+
   it('updates FX palettes that still follow the generator palette', () => {
-    const base = createDefaultRecipe()
-    useLab.getState().hydrateRecipe(base)
-    useLab.getState().randomizeFxStack()
+    // An explicit posterize rather than a random stack: the randomizer is free
+    // to return a stack with no palette-bearing effect at all.
+    useLab.getState().hydrateRecipe(createDefaultRecipe())
+    useLab.getState().addEffectLayer('posterize')
 
     const before = useLab.getState().recipe
-    if (before.source.type !== 'generator')
-      throw new Error('expected generator')
-    const oldPalette = before.source.params.palette
-    if (!Array.isArray(oldPalette)) throw new Error('expected source palette')
+    const id = generatorId()
+    const oldPalette = before.layers.find((l) => l.id === id)?.params.palette
+    if (!Array.isArray(oldPalette)) throw new Error('expected a palette')
 
     const nextPalette = ['#110000', '#ffeeee', '#ff3300']
-    useLab.getState().setSourceParam('palette', nextPalette)
+    useLab.getState().setLayerParam(id, 'palette', nextPalette)
 
     const after = useLab.getState().recipe
     for (const layer of after.layers) {
@@ -82,24 +91,128 @@ describe('source palette changes', () => {
   })
 
   it('does not overwrite manually diverged FX palettes', () => {
-    const base = createDefaultRecipe()
-    useLab.getState().hydrateRecipe(base)
-    useLab.getState().randomizeFxStack()
+    useLab.getState().hydrateRecipe(createDefaultRecipe())
+    useLab.getState().addEffectLayer('posterize')
 
     const paletteLayer = useLab
       .getState()
-      .recipe.layers.find((layer) => Array.isArray(layer.params.palette))
+      .recipe.layers.find(
+        (layer) =>
+          layer.kind === 'effect' && Array.isArray(layer.params.palette),
+      )
     if (!paletteLayer) throw new Error('expected a palette layer')
 
     const customPalette = ['#000000', '#ffffff']
     useLab.getState().setLayerParam(paletteLayer.id, 'palette', customPalette)
     useLab
       .getState()
-      .setSourceParam('palette', ['#110000', '#ffeeee', '#ff3300'])
+      .setLayerParam(generatorId(), 'palette', ['#110000', '#ffeeee', '#ff3300'])
 
     const layer = useLab
       .getState()
       .recipe.layers.find((entry) => entry.id === paletteLayer.id)
     expect(layer?.params.palette).toEqual(customPalette)
+  })
+
+  it('leaves a second generator with its own palette alone', () => {
+    // Two fields deliberately coloured differently must stay that way; only
+    // layers that never chose a palette follow the one being edited.
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+    useLab.getState().addGeneratorLayer()
+
+    const second = useLab.getState().selectedLayerId!
+    const own = ['#123456', '#abcdef']
+    useLab.getState().setLayerParam(second, 'palette', own)
+    useLab
+      .getState()
+      .setLayerParam(generatorId(), 'palette', ['#110000', '#ffeeee'])
+
+    const layer = useLab
+      .getState()
+      .recipe.layers.find((entry) => entry.id === second)
+    expect(layer?.params.palette).toEqual(own)
+  })
+})
+
+describe('editing mixed layer kinds', () => {
+  it('adds, selects, and reorders each kind', () => {
+    useLab.getState().hydrateRecipe(createDefaultRecipe())
+
+    useLab.getState().addGeneratorLayer()
+    const generator = useLab.getState().selectedLayerId!
+    useLab.getState().addImageLayer('blob:test', 'photo.jpg')
+    const image = useLab.getState().selectedLayerId!
+    useLab.getState().addEffectLayer('grain')
+    const effect = useLab.getState().selectedLayerId!
+
+    const kinds = useLab.getState().recipe.layers.slice(-3).map((l) => l.kind)
+    expect(kinds).toEqual(['generator', 'image', 'effect'])
+
+    // The import's pixels live outside the document, keyed by handle.
+    const layer = useLab
+      .getState()
+      .recipe.layers.find((entry) => entry.id === image)
+    if (layer?.kind !== 'image') throw new Error('expected an image layer')
+    expect(useLab.getState().assets[layer.asset]).toBe('blob:test')
+    expect(JSON.stringify(useLab.getState().recipe)).not.toContain('blob:test')
+
+    useLab.getState().moveLayerTo(effect, 0)
+    expect(useLab.getState().recipe.layers[0].id).toBe(effect)
+
+    useLab.getState().undo()
+    expect(useLab.getState().recipe.layers[0].id).not.toBe(effect)
+
+    // Duplicating any kind gives a fresh id and an independent params object.
+    useLab.getState().duplicateLayer(generator)
+    const copy = useLab.getState().selectedLayerId!
+    expect(copy).not.toBe(generator)
+    useLab.getState().setLayerParam(copy, 'scale', 9)
+    const original = useLab
+      .getState()
+      .recipe.layers.find((entry) => entry.id === generator)
+    expect(original?.params.scale).not.toBe(9)
+  })
+
+  it('keeps an imported asset available after undoing its layer', () => {
+    // Undo removes the layer, not the file — redo has to find the pixels again.
+    useLab.getState().hydrateRecipe(createDefaultRecipe())
+    useLab.getState().addImageLayer('blob:kept', 'photo.jpg')
+
+    const layer = useLab.getState().recipe.layers.at(-1)
+    if (layer?.kind !== 'image') throw new Error('expected an image layer')
+
+    useLab.getState().undo()
+    expect(useLab.getState().assets[layer.asset]).toBe('blob:kept')
+
+    useLab.getState().redo()
+    expect(useLab.getState().recipe.layers.at(-1)?.id).toBe(layer.id)
+  })
+
+  it('reseeds a generator without touching its parameters', () => {
+    useLab.getState().hydrateRecipe(createDefaultRecipe())
+    const id = useLab.getState().recipe.layers[0].id
+    const before = useLab.getState().recipe.layers[0].params
+
+    useLab.getState().reseedLayer(id)
+    const after = useLab.getState().recipe.layers[0].params
+
+    expect(after.seed).not.toBe(before.seed)
+    expect(after.scale).toBe(before.scale)
+  })
+
+  it('randomize-FX leaves every non-effect layer untouched', () => {
+    useLab.getState().hydrateRecipe(createDefaultRecipe())
+    useLab.getState().addImageLayer('blob:test', 'photo.jpg')
+
+    const before = useLab
+      .getState()
+      .recipe.layers.filter((layer) => layer.kind !== 'effect')
+    useLab.getState().randomizeFxStack()
+    const after = useLab
+      .getState()
+      .recipe.layers.filter((layer) => layer.kind !== 'effect')
+
+    expect(after).toEqual(before)
   })
 })

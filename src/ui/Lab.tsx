@@ -2,10 +2,9 @@ import { useEffect } from 'react'
 import { useLab } from '#/app/store'
 import { useRecipeUrl } from '#/app/useRecipeUrl'
 import { CanvasViewport } from './CanvasViewport'
-import { SourcePanel } from './SourcePanel'
 import { PresetStrip } from './PresetStrip'
-import { EffectStack } from './EffectStack'
-import { EffectControls } from './EffectControls'
+import { LayerStack } from './LayerStack'
+import { LayerInspector } from './LayerInspector'
 import { ExportPanel } from './ExportPanel'
 import { Redo2, Shuffle, Undo2 } from 'lucide-react'
 
@@ -75,15 +74,9 @@ export function Lab() {
           }}
         >
           <div className="flex flex-col gap-5">
-            {/* Above the source controls on purpose: this is the fastest route
-                to a good image, so it should be the first thing read. */}
+            {/* First thing read: the fastest route to a good image. Layer
+                editing lives on the right, with the stack it edits. */}
             <PresetStrip />
-            <div
-              className="border-t pt-5"
-              style={{ borderColor: 'var(--color-line)' }}
-            >
-              <SourcePanel />
-            </div>
             <div
               className="border-t pt-5"
               style={{ borderColor: 'var(--color-line)' }}
@@ -105,12 +98,12 @@ export function Lab() {
           }}
         >
           <div className="flex flex-col gap-5">
-            <EffectStack />
+            <LayerStack />
             <div
               className="border-t pt-5"
               style={{ borderColor: 'var(--color-line)' }}
             >
-              <EffectControls />
+              <LayerInspector />
             </div>
           </div>
         </aside>

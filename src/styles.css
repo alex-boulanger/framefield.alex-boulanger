@@ -27,6 +27,7 @@ body,
 #app {
   min-height: 100%;
   overscroll-behavior: none;
+  user-select: none;
 }
 
 body {
