@@ -112,18 +112,21 @@ export function LayerStack() {
           strategy={verticalListSortingStrategy}
         >
           <div className="flex flex-col">
-            {layers.map((layer) => (
-              <StackRow
-                key={layer.id}
-                layer={layer}
-                selected={layer.id === selectedId}
-                onSelect={() => selectLayer(layer.id)}
-                onToggle={() => toggleLayer(layer.id)}
-                onDuplicate={() => duplicateLayer(layer.id)}
-                onRemove={() => removeLayer(layer.id)}
-                onRename={(name) => setLayerName(layer.id, name)}
-              />
-            ))}
+            {layers
+              .slice()
+              .reverse()
+              .map((layer) => (
+                <StackRow
+                  key={layer.id}
+                  layer={layer}
+                  selected={layer.id === selectedId}
+                  onSelect={() => selectLayer(layer.id)}
+                  onToggle={() => toggleLayer(layer.id)}
+                  onDuplicate={() => duplicateLayer(layer.id)}
+                  onRemove={() => removeLayer(layer.id)}
+                  onRename={(name) => setLayerName(layer.id, name)}
+                />
+              ))}
 
             {layers.length === 0 && (
               <p className="ff-value py-3 text-center">Empty stack</p>
@@ -131,11 +134,6 @@ export function LayerStack() {
           </div>
         </SortableContext>
       </DndContext>
-
-      <button type="button" className="ff-btn" onClick={randomizeFxStack}>
-        <Shuffle size={13} />
-        Randomize FX
-      </button>
 
       {adding ? (
         <div className="flex flex-col gap-1">
@@ -186,7 +184,11 @@ export function LayerStack() {
           </button>
         </div>
       ) : (
-        <button type="button" className="ff-btn" onClick={() => setAdding(true)}>
+        <button
+          type="button"
+          className="ff-btn"
+          onClick={() => setAdding(true)}
+        >
           <Plus size={13} />
           Add layer
         </button>
@@ -197,6 +199,15 @@ export function LayerStack() {
           {error}
         </span>
       )}
+      <div
+        className="border-t mt-3 h-3"
+        style={{ borderColor: 'var(--color-line)' }}
+      />
+
+      <button type="button" className="ff-btn" onClick={randomizeFxStack}>
+        <Shuffle size={13} />
+        Randomize FX
+      </button>
 
       <input
         ref={inputRef}

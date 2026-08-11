@@ -298,6 +298,51 @@ export function blurPlane(
 }
 
 /**
+ * Bilinear resample of a single-channel plane.
+ *
+ * For fields that are expensive per sample but smooth by construction — a LIC
+ * plane is the case this exists for — computing at a fraction of the render
+ * size and stretching costs a quarter of the samples per halving, and the
+ * result is close because there was little high-frequency detail to lose.
+ */
+export function resamplePlane(
+  src: Float32Array,
+  srcWidth: number,
+  srcHeight: number,
+  width: number,
+  height: number,
+): Float32Array {
+  if (srcWidth === width && srcHeight === height) return src
+
+  const dst = new Float32Array(width * height)
+  // Map corner to corner so the plane covers the same area it was sampled over.
+  const stepX = (srcWidth - 1) / Math.max(1, width - 1)
+  const stepY = (srcHeight - 1) / Math.max(1, height - 1)
+
+  for (let y = 0; y < height; y++) {
+    const sy = y * stepY
+    const y0 = Math.min(srcHeight - 1, Math.floor(sy))
+    const y1 = Math.min(srcHeight - 1, y0 + 1)
+    const ty = sy - y0
+    const row0 = y0 * srcWidth
+    const row1 = y1 * srcWidth
+
+    for (let x = 0; x < width; x++) {
+      const sx = x * stepX
+      const x0 = Math.min(srcWidth - 1, Math.floor(sx))
+      const x1 = Math.min(srcWidth - 1, x0 + 1)
+      const tx = sx - x0
+
+      const top = src[row0 + x0] + (src[row0 + x1] - src[row0 + x0]) * tx
+      const bottom = src[row1 + x0] + (src[row1 + x1] - src[row1 + x0]) * tx
+      dst[y * width + x] = top + (bottom - top) * ty
+    }
+  }
+
+  return dst
+}
+
+/**
  * Gaussian blur, in place, in linear light.
  *
  * Approximated with three box passes rather than a true convolution: a real

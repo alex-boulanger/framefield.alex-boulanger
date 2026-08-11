@@ -1,4 +1,10 @@
-import { blur, blurPlane, createBuffer, srgbToLinear } from '../buffer'
+import {
+  blur,
+  blurPlane,
+  createBuffer,
+  resamplePlane,
+  srgbToLinear,
+} from '../buffer'
 import type { PixelBuffer } from '../buffer'
 import {
   buildFlowField,
@@ -14,6 +20,26 @@ import { createRng } from '../rng'
 import { defaultParams, list, num, roundParam, str } from '../params'
 import type { ParamSpec } from '../params'
 import type { Params, RenderEnv } from '../types'
+
+/**
+ * Fraction of the render size the LIC plane is computed at.
+ *
+ * Line integral convolution is the only thing in the generator that costs more
+ * than one evaluation per pixel: it walks `2 x steps` samples along a
+ * streamline for every pixel, which made the flow field twelve times more
+ * expensive than any other and 89% of the cost of a preset that used it.
+ *
+ * Halving the plane is an eightfold saving — a quarter of the pixels, and half
+ * the steps across each — and it costs little, because a LIC plane is smooth
+ * along its streaks by construction and is low-passed immediately afterwards
+ * anyway. What it does cost is texture granularity: the noise cells the streaks
+ * are made of double in size, so the result reads slightly softer.
+ *
+ * A *ratio* rather than a pixel cap on purpose. A fixed cap would give a small
+ * preview relatively more detail than the export, which is exactly the
+ * preview/export fidelity the whole param model is built to preserve.
+ */
+const FLOW_PLANE_SCALE = 0.5
 
 /**
  * The source generator.
@@ -411,30 +437,39 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
             fbmOptions,
           )
 
-          const plane = new Float32Array(width * height)
-          for (let py = 0; py < height; py++) {
-            for (let px = 0; px < width; px++) {
-              plane[py * width + px] = lic(
-                px / short,
-                py / short,
+          const planeWidth = Math.max(2, Math.round(width * FLOW_PLANE_SCALE))
+          const planeHeight = Math.max(2, Math.round(height * FLOW_PLANE_SCALE))
+          const planeShort = Math.min(planeWidth, planeHeight)
+          // Fewer pixels *and* proportionally fewer steps across each of them,
+          // so halving the plane is an eightfold saving rather than fourfold.
+          // The streak keeps its length in the finished image because the step
+          // is measured against the plane's own short edge.
+          const steps = Math.max(1, Math.round(flowSteps * (planeShort / short)))
+
+          const plane = new Float32Array(planeWidth * planeHeight)
+          for (let py = 0; py < planeHeight; py++) {
+            for (let px = 0; px < planeWidth; px++) {
+              plane[py * planeWidth + px] = lic(
+                px / planeShort,
+                py / planeShort,
                 seed,
                 flowField,
                 {
-                  steps: flowSteps,
+                  steps,
                   // Exactly one texture cell per step, and this is the whole
                   // trick. A streak appears because neighbouring pixels along the
                   // flow average almost the *same* samples, shifted by one. Any
                   // longer stride makes their sample sets disjoint, the
                   // correlation vanishes, and the result is indistinguishable
                   // from static.
-                  stepLength: 1 / short,
-                  textureScale: short,
+                  stepLength: 1 / planeShort,
+                  textureScale: planeShort,
                 },
               )
             }
           }
 
-          blurPlane(plane, width, height, 1)
+          blurPlane(plane, planeWidth, planeHeight, 1)
 
           // Measure the spread that actually survived rather than predicting
           // it: the blur radius, step count, and field all affect it.
@@ -452,7 +487,9 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
             plane[i] = 0.5 + (plane[i] - mean) * gain
           }
 
-          return plane
+          // Stretch last: the blur and the measured gain both want to run on
+          // the samples that were actually computed, not on interpolated ones.
+          return resamplePlane(plane, planeWidth, planeHeight, width, height)
         })()
       : null
 

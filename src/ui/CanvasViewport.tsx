@@ -7,6 +7,9 @@ import {
   stackKeys,
 } from '#/renderer/renderRecipe'
 import {
+  FAST_RENDER_MS,
+  interactiveRung,
+  previewLadder,
   previewRequestScales,
   SETTLED_PREVIEW_DELAY_MS,
 } from './previewScale'
@@ -132,6 +135,36 @@ export function CanvasViewport() {
   const { interactive: interactiveScale, settled: settledScale } =
     previewRequestScales(recipe, box.width, box.height, workerReady)
 
+  /**
+   * The preview climbs resolutions instead of jumping straight to the settled
+   * one. A cold stack can take seconds at full scale, and a blurry picture in
+   * 50ms reads as "working" where a blank canvas for two seconds reads as
+   * "broken" — for about four percent more total work (see `previewLadder`).
+   */
+  const ladder = previewLadder(settledScale)
+  const topRung = interactiveRung(ladder, interactiveScale)
+
+  /**
+   * Whether the coarse rungs can be skipped.
+   *
+   * Set from the last render at the persistent worker's top rung. A warm
+   * checkpoint puts a slider drag at tens of milliseconds, and climbing a
+   * ladder there would flash two coarser frames on every single drag step —
+   * which on a dithered image is far more distracting than the wait it saves.
+   * So the ladder only unfolds once something has actually proved slow.
+   */
+  const fastPathRef = useRef(false)
+
+  /**
+   * Current render inputs, for the worker callbacks.
+   *
+   * The persistent worker's handler is installed once at mount but has to post
+   * the *next* rung with today's recipe, so it reads through this rather than a
+   * stale closure.
+   */
+  const inputsRef = useRef({ recipe, assets, ladder, topRung })
+  inputsRef.current = { recipe, assets, ladder, topRung }
+
   const paintPreview = (message: PreviewMessage) => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -156,6 +189,63 @@ export function CanvasViewport() {
     settledWorkerRef.current = null
   }
 
+  /** Ask a worker for one rung of the current generation. */
+  const requestRung = (worker: Worker, scale: number) => {
+    const { recipe: current, assets: currentAssets } = inputsRef.current
+    worker.postMessage({
+      kind: 'preview',
+      id: latestWorkerIdRef.current,
+      recipe: current,
+      scale,
+      assets: currentAssets,
+    })
+  }
+
+  /**
+   * Hand the expensive rungs to a worker that can be thrown away.
+   *
+   * Rendering is synchronous, so terminating the worker is the only way to
+   * abandon a pass the user has already invalidated — which is why these rungs
+   * cannot live on the persistent one.
+   */
+  const climbRemainingRungs = () => {
+    const { ladder: rungs, topRung: top } = inputsRef.current
+    if (top >= rungs.length - 1) return
+
+    cancelSettledPreview()
+    settledTimerRef.current = window.setTimeout(() => {
+      settledWorkerRef.current?.terminate()
+      const worker = new Worker(
+        new URL('../renderer/render.worker.ts', import.meta.url),
+        { type: 'module' },
+      )
+      settledWorkerRef.current = worker
+
+      const finish = () => {
+        worker.terminate()
+        if (settledWorkerRef.current === worker) settledWorkerRef.current = null
+      }
+
+      worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+        const message = event.data
+        if (message.id !== latestWorkerIdRef.current) return finish()
+        if (message.kind !== 'preview') return finish()
+
+        paintPreview(message)
+
+        const next = inputsRef.current.ladder.indexOf(message.scale) + 1
+        if (next > 0 && next < inputsRef.current.ladder.length) {
+          requestRung(worker, inputsRef.current.ladder[next])
+        } else {
+          finish()
+        }
+      }
+      worker.onerror = finish
+
+      requestRung(worker, rungs[top + 1])
+    }, SETTLED_PREVIEW_DELAY_MS)
+  }
+
   useEffect(() => {
     if (typeof Worker === 'undefined') return
 
@@ -166,9 +256,7 @@ export function CanvasViewport() {
     workerRef.current = worker
     setWorkerReady(true)
 
-    worker.onmessage = (
-      event: MessageEvent<WorkerMessage>,
-    ) => {
+    worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
       const message = event.data
       if (message.id !== latestWorkerIdRef.current) return
 
@@ -181,6 +269,32 @@ export function CanvasViewport() {
       if (message.kind !== 'preview') return
 
       paintPreview(message)
+
+      const { ladder: rungs, topRung: top } = inputsRef.current
+      const rung = rungs.indexOf(message.scale)
+
+      // Only the top rung is a fair measure of "is this stack expensive": the
+      // coarse ones are fast by construction.
+      if (rung === top) fastPathRef.current = message.renderMs < FAST_RENDER_MS
+
+      // Climb immediately rather than on a clock. A timer against a render that
+      // outlasts it just queues work behind the pass already in flight.
+      if (rung >= 0 && rung < top) {
+        requestRung(worker, rungs[rung + 1])
+        return
+      }
+
+      climbRemainingRungs()
+    }
+
+    // Without this a worker that dies — a module that fails to load, an
+    // uncaught throw — simply stops answering, and the preview stays blank with
+    // nothing in the console to say why. Fall back to rendering on the main
+    // thread instead, which is slower but visible.
+    worker.onerror = () => {
+      worker.terminate()
+      workerRef.current = null
+      setWorkerReady(false)
     }
 
     return () => {
@@ -212,51 +326,15 @@ export function CanvasViewport() {
       frameRef.current = null
 
       if (workerReady && workerRef.current) {
+        // A new generation: every reply still in flight is now stale, and the
+        // worker climbing the expensive rungs is abandoned outright.
         latestWorkerIdRef.current += 1
-        const id = latestWorkerIdRef.current
-        workerRef.current.postMessage({
-          kind: 'preview',
-          id,
-          recipe,
-          scale: interactiveScale,
-          assets,
-        })
-
-        if (settledScale > interactiveScale + 0.001) {
-          settledTimerRef.current = window.setTimeout(() => {
-            settledWorkerRef.current?.terminate()
-            const settledWorker = new Worker(
-              new URL('../renderer/render.worker.ts', import.meta.url),
-              { type: 'module' },
-            )
-            settledWorkerRef.current = settledWorker
-            latestWorkerIdRef.current += 1
-            const settledId = latestWorkerIdRef.current
-
-            settledWorker.onmessage = (event: MessageEvent<WorkerMessage>) => {
-              const message = event.data
-              if (message.id !== latestWorkerIdRef.current) return
-              if (message.kind === 'preview') paintPreview(message)
-              settledWorker.terminate()
-              if (settledWorkerRef.current === settledWorker) {
-                settledWorkerRef.current = null
-              }
-            }
-            settledWorker.onerror = () => {
-              settledWorker.terminate()
-              if (settledWorkerRef.current === settledWorker) {
-                settledWorkerRef.current = null
-              }
-            }
-            settledWorker.postMessage({
-              kind: 'preview',
-              id: settledId,
-              recipe,
-              scale: settledScale,
-              assets,
-            })
-          }, SETTLED_PREVIEW_DELAY_MS)
-        }
+        // Start where the last render says we can afford to. The handler climbs
+        // from here on its own.
+        requestRung(
+          workerRef.current,
+          ladder[fastPathRef.current ? topRung : 0],
+        )
         return
       }
 

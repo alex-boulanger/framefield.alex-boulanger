@@ -82,8 +82,17 @@ async function decodeAssets(urls: AssetUrls): Promise<RenderAssets> {
  * invalidates that layer and everything above it, so a slider drag high in the
  * stack never re-runs the generators underneath — which is the difference
  * between a responsive preview and a 300ms one.
+ *
+ * Keyed by scale because the preview climbs a ladder of resolutions: a
+ * checkpoint only fits a render of the same dimensions, so a single slot would
+ * be overwritten by every rung and hit on none of them. Bounded because the top
+ * rung's buffer is ~23MB at export size.
  */
-let cache: { keys: Array<string>; checkpoint: Checkpoint } | null = null
+const checkpoints = new Map<
+  number,
+  { keys: Array<string>; checkpoint: Checkpoint }
+>()
+const MAX_CACHED_SCALES = 4
 
 self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
   const request = event.data
@@ -106,6 +115,7 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
     // Asset identity has to be part of the key: swapping the file behind a
     // handle changes the pixels without changing the recipe.
     const keys = stackKeys(request.recipe, request.assets ?? {})
+    const cache = checkpoints.get(request.scale)
     const unchanged = cache ? commonPrefix(cache.keys, keys) : 0
     const resume =
       cache && cache.checkpoint.index <= unchanged ? cache.checkpoint : null
@@ -118,7 +128,14 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
       captureAt: unchanged,
     })
 
-    if (result.captured) cache = { keys, checkpoint: result.captured }
+    if (result.captured) {
+      // Re-insert to make this scale the most recently used.
+      checkpoints.delete(request.scale)
+      checkpoints.set(request.scale, { keys, checkpoint: result.captured })
+      while (checkpoints.size > MAX_CACHED_SCALES) {
+        checkpoints.delete(checkpoints.keys().next().value!)
+      }
+    }
 
     self.postMessage({
       kind: 'preview',

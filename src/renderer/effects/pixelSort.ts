@@ -22,7 +22,7 @@ export const PIXEL_SORT_PARAMS: Array<ParamSpec> = [
     kind: 'select',
     key: 'rotation',
     label: 'Direction',
-    default: '0',
+    default: '90',
     options: [
       { value: '0', label: '→' },
       { value: '90', label: '↓' },

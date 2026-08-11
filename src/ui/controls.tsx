@@ -88,7 +88,7 @@ export function Toggle({
           borderColor: checked
             ? 'var(--color-signal-dim)'
             : 'var(--color-line)',
-          background: checked ? '#241209' : 'var(--color-void)',
+          background: checked ? 'var(--color-raised)' : 'var(--color-void)',
         }}
       >
         <span

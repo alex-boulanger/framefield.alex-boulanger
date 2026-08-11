@@ -154,7 +154,9 @@ export function ExportPanel() {
                 borderColor: active
                   ? 'var(--color-signal-dim)'
                   : 'var(--color-line)',
-                background: active ? '#241209' : 'var(--color-void)',
+                background: active
+                  ? 'var(--color-raised)'
+                  : 'var(--color-void)',
               }}
             >
               <span
