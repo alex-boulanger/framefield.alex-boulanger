@@ -3,6 +3,7 @@ import {
   createDefaultRecipe,
   createLayer,
   remixRecipe,
+  randomizeFxStack,
   SIZE_PRESETS,
 } from '#/renderer/recipe'
 import { effectDefaults } from '#/renderer/effects'
@@ -29,17 +30,23 @@ import type {
 
 export interface LabState {
   recipe: Recipe
+  past: Array<Recipe>
+  future: Array<Recipe>
   selectedLayerId: string | null
   /** Object URL of the imported image, or null for generator sources. */
   imageUrl: string | null
 
   setRecipe: (recipe: Recipe) => void
+  hydrateRecipe: (recipe: Recipe) => void
   setCanvasSize: (width: number, height: number) => void
+  undo: () => void
+  redo: () => void
 
   setSeed: (seed: string) => void
   randomizeSeed: () => void
   setSourceParam: (key: string, value: ParamValue) => void
   randomizeSource: () => void
+  randomizeFxStack: () => void
   remix: () => void
 
   setImage: (url: string, name: string) => void
@@ -50,15 +57,56 @@ export interface LabState {
   duplicateLayer: (id: string) => void
   toggleLayer: (id: string) => void
   selectLayer: (id: string | null) => void
-  moveLayer: (id: string, direction: -1 | 1) => void
+  moveLayerTo: (id: string, targetIndex: number) => void
   setLayerParam: (id: string, key: string, value: ParamValue) => void
   setLayerOpacity: (id: string, opacity: number) => void
   setLayerBlendMode: (id: string, mode: BlendMode) => void
   setLayerMask: (id: string, mask: Partial<ToneMask>) => void
+  setLayerName: (id: string, name: string) => void
   resetLayer: (id: string) => void
 }
 
 const initialRecipe = createDefaultRecipe()
+const HISTORY_LIMIT = 80
+
+function pushHistory(state: LabState): Pick<LabState, 'past' | 'future'> {
+  return {
+    past: [...state.past, state.recipe].slice(-HISTORY_LIMIT),
+    future: [],
+  }
+}
+
+function selectedLayer(recipe: Recipe, selectedLayerId: string | null) {
+  return recipe.layers.some((layer) => layer.id === selectedLayerId)
+    ? selectedLayerId
+    : (recipe.layers[0]?.id ?? null)
+}
+
+function samePalette(a: unknown, b: unknown) {
+  return (
+    Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((color, index) => color === b[index])
+  )
+}
+
+function syncInheritedLayerPalettes(
+  layers: Array<Layer>,
+  previousPalette: unknown,
+  nextPalette: unknown,
+): Array<Layer> {
+  if (!Array.isArray(nextPalette)) return layers
+
+  return layers.map((layer) =>
+    samePalette(layer.params.palette, previousPalette)
+      ? {
+          ...layer,
+          params: { ...layer.params, palette: [...nextPalette] },
+        }
+      : layer,
+  )
+}
 
 /** Immutable layer edit — keeps recipe identity changing only when it must. */
 function mapLayer(
@@ -76,24 +124,59 @@ function mapLayer(
 
 export const useLab = create<LabState>((set, get) => ({
   recipe: initialRecipe,
+  past: [],
+  future: [],
   selectedLayerId: initialRecipe.layers[0]?.id ?? null,
   imageUrl: null,
 
   setRecipe: (recipe) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe,
-      selectedLayerId: recipe.layers.some((l) => l.id === state.selectedLayerId)
-        ? state.selectedLayerId
-        : (recipe.layers[0]?.id ?? null),
+      selectedLayerId: selectedLayer(recipe, state.selectedLayerId),
+    })),
+
+  hydrateRecipe: (recipe) =>
+    set((state) => ({
+      recipe,
+      past: [],
+      future: [],
+      selectedLayerId: selectedLayer(recipe, state.selectedLayerId),
     })),
 
   setCanvasSize: (width, height) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: { ...state.recipe, canvas: { width, height } },
     })),
 
+  undo: () =>
+    set((state) => {
+      if (state.past.length === 0) return state
+      const previous = state.past[state.past.length - 1]
+      return {
+        recipe: previous,
+        past: state.past.slice(0, -1),
+        future: [state.recipe, ...state.future].slice(0, HISTORY_LIMIT),
+        selectedLayerId: selectedLayer(previous, state.selectedLayerId),
+      }
+    }),
+
+  redo: () =>
+    set((state) => {
+      if (state.future.length === 0) return state
+      const next = state.future[0]
+      return {
+        recipe: next,
+        past: [...state.past, state.recipe].slice(-HISTORY_LIMIT),
+        future: state.future.slice(1),
+        selectedLayerId: selectedLayer(next, state.selectedLayerId),
+      }
+    }),
+
   setSeed: (seed) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe:
         state.recipe.source.type === 'generator'
           ? {
@@ -107,6 +190,7 @@ export const useLab = create<LabState>((set, get) => ({
 
   setSourceParam: (key, value) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe:
         state.recipe.source.type === 'generator'
           ? {
@@ -115,6 +199,14 @@ export const useLab = create<LabState>((set, get) => ({
                 ...state.recipe.source,
                 params: { ...state.recipe.source.params, [key]: value },
               },
+              layers:
+                key === 'palette'
+                  ? syncInheritedLayerPalettes(
+                      state.recipe.layers,
+                      state.recipe.source.params.palette,
+                      value,
+                    )
+                  : state.recipe.layers,
             }
           : state.recipe,
     })),
@@ -125,6 +217,7 @@ export const useLab = create<LabState>((set, get) => ({
       const seed = randomSeed()
       const palette = state.recipe.source.params.palette
       return {
+        ...pushHistory(state),
         recipe: {
           ...state.recipe,
           source: {
@@ -141,10 +234,24 @@ export const useLab = create<LabState>((set, get) => ({
       }
     }),
 
+  randomizeFxStack: () =>
+    set((state) => {
+      const recipe = randomizeFxStack(state.recipe)
+      return {
+        ...pushHistory(state),
+        recipe,
+        selectedLayerId: recipe.layers[0]?.id ?? null,
+      }
+    }),
+
   remix: () =>
     set((state) => {
       const recipe = remixRecipe(state.recipe)
-      return { recipe, selectedLayerId: recipe.layers[0]?.id ?? null }
+      return {
+        ...pushHistory(state),
+        recipe,
+        selectedLayerId: recipe.layers[0]?.id ?? null,
+      }
     }),
 
   setImage: (url, name) =>
@@ -153,6 +260,7 @@ export const useLab = create<LabState>((set, get) => ({
       // real memory cost with large photos.
       if (state.imageUrl) URL.revokeObjectURL(state.imageUrl)
       return {
+        ...pushHistory(state),
         imageUrl: url,
         recipe: { ...state.recipe, source: { type: 'image', name } },
       }
@@ -163,6 +271,7 @@ export const useLab = create<LabState>((set, get) => ({
       if (state.imageUrl) URL.revokeObjectURL(state.imageUrl)
       const seed = randomSeed()
       return {
+        ...pushHistory(state),
         imageUrl: null,
         recipe: {
           ...state.recipe,
@@ -180,6 +289,7 @@ export const useLab = create<LabState>((set, get) => ({
     set((state) => {
       const layer = createLayer(type)
       return {
+        ...pushHistory(state),
         recipe: { ...state.recipe, layers: [...state.recipe.layers, layer] },
         selectedLayerId: layer.id,
       }
@@ -189,6 +299,7 @@ export const useLab = create<LabState>((set, get) => ({
     set((state) => {
       const layers = state.recipe.layers.filter((layer) => layer.id !== id)
       return {
+        ...pushHistory(state),
         recipe: { ...state.recipe, layers },
         selectedLayerId:
           state.selectedLayerId === id
@@ -210,6 +321,7 @@ export const useLab = create<LabState>((set, get) => ({
       const layers = [...state.recipe.layers]
       layers.splice(index + 1, 0, copy)
       return {
+        ...pushHistory(state),
         recipe: { ...state.recipe, layers },
         selectedLayerId: copy.id,
       }
@@ -217,6 +329,7 @@ export const useLab = create<LabState>((set, get) => ({
 
   toggleLayer: (id) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: mapLayer(state.recipe, id, (layer) => ({
         ...layer,
         enabled: !layer.enabled,
@@ -225,18 +338,21 @@ export const useLab = create<LabState>((set, get) => ({
 
   selectLayer: (id) => set({ selectedLayerId: id }),
 
-  moveLayer: (id, direction) =>
+  moveLayerTo: (id, targetIndex) =>
     set((state) => {
       const layers = [...state.recipe.layers]
       const index = layers.findIndex((layer) => layer.id === id)
-      const target = index + direction
-      if (index === -1 || target < 0 || target >= layers.length) return state
-      ;[layers[index], layers[target]] = [layers[target], layers[index]]
-      return { recipe: { ...state.recipe, layers } }
+      if (index === -1) return state
+      const clamped = Math.max(0, Math.min(layers.length - 1, targetIndex))
+      if (index === clamped) return state
+      const [layer] = layers.splice(index, 1)
+      layers.splice(clamped, 0, layer)
+      return { ...pushHistory(state), recipe: { ...state.recipe, layers } }
     }),
 
   setLayerParam: (id, key, value) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: mapLayer(state.recipe, id, (layer) => ({
         ...layer,
         params: { ...layer.params, [key]: value },
@@ -245,11 +361,13 @@ export const useLab = create<LabState>((set, get) => ({
 
   setLayerOpacity: (id, opacity) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: mapLayer(state.recipe, id, (layer) => ({ ...layer, opacity })),
     })),
 
   setLayerBlendMode: (id, mode) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: mapLayer(state.recipe, id, (layer) => ({
         ...layer,
         blendMode: mode,
@@ -258,6 +376,7 @@ export const useLab = create<LabState>((set, get) => ({
 
   setLayerMask: (id, mask) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: mapLayer(state.recipe, id, (layer) => {
         const next = { ...layer.mask, ...mask }
         // Keep the band ordered while dragging so the two handles can cross
@@ -273,8 +392,21 @@ export const useLab = create<LabState>((set, get) => ({
       }),
     })),
 
+  setLayerName: (id, name) =>
+    set((state) => ({
+      ...pushHistory(state),
+      recipe: mapLayer(state.recipe, id, (layer) => {
+        const trimmed = name.trim().slice(0, 48)
+        return {
+          ...layer,
+          name: trimmed.length > 0 ? trimmed : undefined,
+        }
+      }),
+    })),
+
   resetLayer: (id) =>
     set((state) => ({
+      ...pushHistory(state),
       recipe: mapLayer(state.recipe, id, (layer) => ({
         ...layer,
         opacity: 1,

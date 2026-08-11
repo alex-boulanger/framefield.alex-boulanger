@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renderRecipe } from './renderRecipe'
+import { renderRecipe, renderSource } from './renderRecipe'
 import { createLayer } from './recipe'
 import type { Layer, Params, Recipe } from './types'
 import { createBuffer } from './buffer'
@@ -163,6 +163,43 @@ describe('renderRecipe', () => {
   })
 })
 
+describe('renderSource', () => {
+  it('draws imported sources without canvas smoothing', () => {
+    const originalDocument = globalThis.document
+    let smoothingAtDraw: boolean | null = null
+
+    globalThis.document = {
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({
+          imageSmoothingEnabled: true,
+          drawImage() {
+            smoothingAtDraw = this.imageSmoothingEnabled
+          },
+          getImageData: () => new ImageData(8, 8),
+        }),
+      }),
+    } as unknown as Document
+
+    try {
+      renderSource({
+        recipe: {
+          version: 1,
+          source: { type: 'image', name: 'pixel-art.png' },
+          canvas: { width: 8, height: 8 },
+          layers: [],
+        },
+        bitmap: { width: 4, height: 4 } as ImageBitmap,
+      })
+    } finally {
+      globalThis.document = originalDocument
+    }
+
+    expect(smoothingAtDraw).toBe(false)
+  })
+})
+
 /**
  * Scale fidelity — the decision the whole param model rests on.
  *
@@ -210,6 +247,32 @@ describe('scale fidelity', () => {
     expect(
       hasUniformCells(renderAt(0.25, [layer('pixelate', { size: 8 })]), 2),
     ).toBe(true)
+  })
+
+  it('keeps pixelate and posterize structure stable across scales', () => {
+    const layers = [
+      layer('pixelate', { size: 8, sampling: 'average' }),
+      layer('posterize', { levels: 4, mode: 'duotone' }),
+    ]
+    const full = renderAt(1, layers)
+    const half = renderAt(0.5, layers)
+
+    let mismatches = 0
+    for (let y = 0; y < half.height; y++) {
+      for (let x = 0; x < half.width; x++) {
+        const halfPixel = pixel(half, x, y)
+        const fullPixel = pixel(full, x * 2, y * 2)
+        if (
+          Math.abs(halfPixel[0] - fullPixel[0]) > 0.03 ||
+          Math.abs(halfPixel[1] - fullPixel[1]) > 0.03 ||
+          Math.abs(halfPixel[2] - fullPixel[2]) > 0.03
+        ) {
+          mismatches += 1
+        }
+      }
+    }
+
+    expect(mismatches / (half.width * half.height)).toBeLessThan(0.02)
   })
 
   it('keeps channel offsets proportional to the image', () => {

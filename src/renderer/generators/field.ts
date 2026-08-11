@@ -354,6 +354,7 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
   const contrast = num(params, 'contrast', 0.15)
   const brightness = num(params, 'brightness', 0)
   const grain = num(params, 'grain', 0.06)
+  const renderScale = env.scale > 0 ? env.scale : 1
   const ramp = buildRamp(
     list(params, 'palette', ['#050505', '#f5f5f5', '#0057ff']),
   )
@@ -498,7 +499,14 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
 
       // --- grain -------------------------------------------------------
       if (grain > 0) {
-        tone += (whiteNoise(px, py, seed) - 0.5) * grain
+        tone +=
+          (whiteNoise(
+            Math.floor(px / renderScale),
+            Math.floor(py / renderScale),
+            seed,
+          ) -
+            0.5) *
+          grain
       }
 
       tone = toneCurve(tone, contrast, brightness)

@@ -14,7 +14,7 @@ import { decodeRecipe, encodeRecipe } from '#/renderer/recipe'
  */
 export function useRecipeUrl(): void {
   const recipe = useLab((state) => state.recipe)
-  const setRecipe = useLab((state) => state.setRecipe)
+  const hydrateRecipe = useLab((state) => state.hydrateRecipe)
   const hydrated = useRef(false)
 
   // Read once on mount.
@@ -22,10 +22,10 @@ export function useRecipeUrl(): void {
     const encoded = new URLSearchParams(window.location.search).get('r')
     if (encoded) {
       const parsed = decodeRecipe(encoded)
-      if (parsed) setRecipe(parsed)
+      if (parsed) hydrateRecipe(parsed)
     }
     hydrated.current = true
-  }, [setRecipe])
+  }, [hydrateRecipe])
 
   // Write back, debounced so dragging a slider does not thrash the URL.
   useEffect(() => {

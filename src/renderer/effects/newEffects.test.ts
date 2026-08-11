@@ -145,6 +145,24 @@ describe('applyGrain', () => {
     expect(Array.from(full.data)).not.toEqual(Array.from(half.data))
   })
 
+  it('anchors grain cells in export-space coordinates', () => {
+    const full = solid(64, 64, 0.5, 0.5, 0.5)
+    const half = solid(32, 32, 0.5, 0.5, 0.5)
+    const params = { ...base(), amount: 0.6, size: 1, seed: 'fixed' }
+
+    applyGrain(full, params, env(full, 1))
+    applyGrain(half, params, env(half, 0.5))
+
+    for (let y = 0; y < half.height; y++) {
+      for (let x = 0; x < half.width; x++) {
+        expect(pixel(half, x, y)[0]).toBeCloseTo(
+          pixel(full, x * 2, y * 2)[0],
+          6,
+        )
+      }
+    }
+  })
+
   /**
    * Film grain peaks in the midtones. Uniform noise across the whole range
    * reads as digital dirt, so this is the property worth pinning.

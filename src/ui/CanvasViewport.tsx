@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLab } from '#/app/store'
 import { putBuffer, renderRecipe, renderSource } from '#/renderer/renderRecipe'
+import {
+  previewRequestScales,
+  SETTLED_PREVIEW_DELAY_MS,
+} from './previewScale'
 import type { PixelBuffer } from '#/renderer/buffer'
 import type { Recipe } from '#/renderer/types'
 import { ImageOff } from 'lucide-react'
@@ -16,11 +20,11 @@ import { ImageOff } from 'lucide-react'
  */
 
 /** Decode the imported file once and keep the bitmap out of the store. */
-function useSourceBitmap(imageUrl: string | null) {
+function useSourceBitmap(imageUrl: string | null, enabled: boolean) {
   const [bitmap, setBitmap] = useState<ImageBitmap | null>(null)
 
   useEffect(() => {
-    if (!imageUrl) {
+    if (!enabled || !imageUrl) {
       setBitmap(null)
       return
     }
@@ -45,7 +49,7 @@ function useSourceBitmap(imageUrl: string | null) {
       cancelled = true
       created?.close()
     }
-  }, [imageUrl])
+  }, [enabled, imageUrl])
 
   return bitmap
 }
@@ -71,48 +75,101 @@ function useElementSize<T extends HTMLElement>() {
   return [ref, size] as const
 }
 
-/**
- * Preview resolution.
- *
- * Capped by total pixels rather than by a fixed scale so a Story export
- * (1080x1920) and a Landscape one (1200x630) cost roughly the same to preview.
- * Never upscales past 1 — rendering above export resolution would be waste.
- *
- * The budget is what keeps slider drags responsive while the pipeline is still
- * synchronous: every pass is O(pixels), so this is the one number that trades
- * preview sharpness against frame cost. Raise it once rendering moves into a
- * worker (ADR Decision 5).
- */
-const PREVIEW_PIXEL_BUDGET = 420_000
+type PreviewMessage = {
+  kind: 'preview'
+  id: number
+  scale: number
+  image: ImageData
+  renderMs: number
+}
 
-function previewScale(recipe: Recipe, boxWidth: number, boxHeight: number) {
-  if (boxWidth <= 0 || boxHeight <= 0) return 0.5
+type WorkerMessage =
+  | PreviewMessage
+  | { kind: 'export'; id: number; blob: Blob; renderMs: number }
+  | { kind: 'error'; id: number; error: string }
 
-  const fit = Math.min(
-    boxWidth / recipe.canvas.width,
-    boxHeight / recipe.canvas.height,
-  )
-  const dpr = Math.min(window.devicePixelRatio || 1, 2)
-  const budget = Math.sqrt(
-    PREVIEW_PIXEL_BUDGET / (recipe.canvas.width * recipe.canvas.height),
-  )
-
-  return Math.max(0.08, Math.min(1, fit * dpr, budget))
+function sourceKeyFor(recipe: Recipe, scale: number, imageUrl: string | null) {
+  return `${JSON.stringify(recipe.source)}|${recipe.canvas.width}x${recipe.canvas.height}|${scale.toFixed(4)}|${imageUrl ?? 'none'}`
 }
 
 export function CanvasViewport() {
   const recipe = useLab((state) => state.recipe)
   const imageUrl = useLab((state) => state.imageUrl)
-  const bitmap = useSourceBitmap(imageUrl)
 
   const [boxRef, box] = useElementSize<HTMLDivElement>()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const frameRef = useRef<number | null>(null)
+  const workerRef = useRef<Worker | null>(null)
+  const settledWorkerRef = useRef<Worker | null>(null)
+  const settledTimerRef = useRef<number | null>(null)
+  const latestWorkerIdRef = useRef(0)
+  const [workerReady, setWorkerReady] = useState(false)
   const [renderMs, setRenderMs] = useState(0)
+  const [paintedScale, setPaintedScale] = useState(0)
+  const bitmap = useSourceBitmap(imageUrl, !workerReady)
 
   const missingSource = recipe.source.type === 'image' && !bitmap && !imageUrl
 
-  const scale = previewScale(recipe, box.width, box.height)
+  const { interactive: interactiveScale, settled: settledScale } =
+    previewRequestScales(recipe, box.width, box.height, workerReady)
+
+  const paintPreview = (message: PreviewMessage) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    if (
+      canvas.width !== message.image.width ||
+      canvas.height !== message.image.height
+    ) {
+      canvas.width = message.image.width
+      canvas.height = message.image.height
+    }
+    canvas.getContext('2d')?.putImageData(message.image, 0, 0)
+    setPaintedScale(message.scale)
+    setRenderMs(message.renderMs)
+  }
+
+  const cancelSettledPreview = () => {
+    if (settledTimerRef.current !== null) {
+      window.clearTimeout(settledTimerRef.current)
+      settledTimerRef.current = null
+    }
+    settledWorkerRef.current?.terminate()
+    settledWorkerRef.current = null
+  }
+
+  useEffect(() => {
+    if (typeof Worker === 'undefined') return
+
+    const worker = new Worker(
+      new URL('../renderer/render.worker.ts', import.meta.url),
+      { type: 'module' },
+    )
+    workerRef.current = worker
+    setWorkerReady(true)
+
+    worker.onmessage = (
+      event: MessageEvent<WorkerMessage>,
+    ) => {
+      const message = event.data
+      if (message.id !== latestWorkerIdRef.current) return
+
+      if (message.kind === 'error') {
+        worker.terminate()
+        workerRef.current = null
+        setWorkerReady(false)
+        return
+      }
+      if (message.kind !== 'preview') return
+
+      paintPreview(message)
+    }
+
+    return () => {
+      cancelSettledPreview()
+      worker.terminate()
+      workerRef.current = null
+    }
+  }, [])
 
   /**
    * Source cache. Effect params change constantly while dragging, but none of
@@ -120,7 +177,6 @@ export function CanvasViewport() {
    * things that actually do change it. The cache lives here rather than in the
    * renderer so the renderer stays a pure function of its inputs.
    */
-  const sourceKey = `${JSON.stringify(recipe.source)}|${recipe.canvas.width}x${recipe.canvas.height}|${scale.toFixed(4)}|${bitmap ? 'bmp' : 'none'}`
   const sourceRef = useRef<{ key: string; image: PixelBuffer } | null>(null)
 
   useEffect(() => {
@@ -132,26 +188,95 @@ export function CanvasViewport() {
 
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = null
+
+      if (workerReady && workerRef.current) {
+        latestWorkerIdRef.current += 1
+        const id = latestWorkerIdRef.current
+        workerRef.current.postMessage({
+          kind: 'preview',
+          id,
+          recipe,
+          scale: interactiveScale,
+          sourceKey: sourceKeyFor(recipe, interactiveScale, imageUrl),
+          imageUrl,
+        })
+
+        if (settledScale > interactiveScale + 0.001) {
+          settledTimerRef.current = window.setTimeout(() => {
+            settledWorkerRef.current?.terminate()
+            const settledWorker = new Worker(
+              new URL('../renderer/render.worker.ts', import.meta.url),
+              { type: 'module' },
+            )
+            settledWorkerRef.current = settledWorker
+            latestWorkerIdRef.current += 1
+            const settledId = latestWorkerIdRef.current
+
+            settledWorker.onmessage = (event: MessageEvent<WorkerMessage>) => {
+              const message = event.data
+              if (message.id !== latestWorkerIdRef.current) return
+              if (message.kind === 'preview') paintPreview(message)
+              settledWorker.terminate()
+              if (settledWorkerRef.current === settledWorker) {
+                settledWorkerRef.current = null
+              }
+            }
+            settledWorker.onerror = () => {
+              settledWorker.terminate()
+              if (settledWorkerRef.current === settledWorker) {
+                settledWorkerRef.current = null
+              }
+            }
+            settledWorker.postMessage({
+              kind: 'preview',
+              id: settledId,
+              recipe,
+              scale: settledScale,
+              sourceKey: sourceKeyFor(recipe, settledScale, imageUrl),
+              imageUrl,
+            })
+          }, SETTLED_PREVIEW_DELAY_MS)
+        }
+        return
+      }
+
       const start = performance.now()
+      const sourceKey = sourceKeyFor(recipe, interactiveScale, imageUrl)
 
       if (sourceRef.current?.key !== sourceKey) {
         sourceRef.current = {
           key: sourceKey,
-          image: renderSource({ recipe, bitmap, scale }),
+          image: renderSource({ recipe, bitmap, scale: interactiveScale }),
         }
       }
       const sourceImage = sourceRef.current.image
 
-      const image = renderRecipe({ recipe, bitmap, scale, sourceImage })
+      const image = renderRecipe({
+        recipe,
+        bitmap,
+        scale: interactiveScale,
+        sourceImage,
+      })
       putBuffer(canvas, image)
 
+      setPaintedScale(interactiveScale)
       setRenderMs(performance.now() - start)
     })
 
     return () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
+      cancelSettledPreview()
     }
-  }, [recipe, bitmap, box.width, scale, sourceKey])
+  }, [
+    recipe,
+    bitmap,
+    box.width,
+    box.height,
+    interactiveScale,
+    settledScale,
+    workerReady,
+    imageUrl,
+  ])
 
   const aspect = recipe.canvas.width / recipe.canvas.height
 
@@ -173,9 +298,11 @@ export function CanvasViewport() {
             ref={canvasRef}
             className="block h-full w-full object-contain"
             style={{
-              // Nearest-neighbour: dither and pixel structure must not be
-              // smoothed away by the browser's downscale.
-              imageRendering: 'pixelated',
+              // Worker previews render high enough to be downsampled like the
+              // exported PNG in an image viewer. The fallback path keeps
+              // nearest-neighbour display because it renders fewer pixels.
+              imageRendering:
+                workerReady && paintedScale >= 0.9 ? 'auto' : 'pixelated',
               boxShadow: '0 0 0 1px var(--color-line), 0 24px 60px -20px #000',
             }}
           />
@@ -203,7 +330,9 @@ export function CanvasViewport() {
           {recipe.canvas.width} × {recipe.canvas.height}
         </span>
         <div className="flex items-center gap-4">
-          <span className="ff-value">{Math.round(scale * 100)}% preview</span>
+          <span className="ff-value">
+            {Math.round((paintedScale || interactiveScale) * 100)}% preview
+          </span>
           <span
             className="ff-value"
             style={{ color: renderMs > 16 ? 'var(--color-signal)' : undefined }}

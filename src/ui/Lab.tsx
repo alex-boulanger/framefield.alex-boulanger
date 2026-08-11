@@ -7,7 +7,7 @@ import { PresetStrip } from './PresetStrip'
 import { EffectStack } from './EffectStack'
 import { EffectControls } from './EffectControls'
 import { ExportPanel } from './ExportPanel'
-import { Shuffle } from 'lucide-react'
+import { Redo2, Shuffle, Undo2 } from 'lucide-react'
 
 /**
  * App shell.
@@ -21,6 +21,8 @@ export function Lab() {
   useRecipeUrl()
 
   const remix = useLab((state) => state.remix)
+  const undo = useLab((state) => state.undo)
+  const redo = useLab((state) => state.redo)
 
   useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) =>
@@ -31,6 +33,21 @@ export function Lab() {
 
     const down = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return
+      const key = event.key.toLowerCase()
+      const mod = event.metaKey || event.ctrlKey
+
+      if (mod && key === 'z') {
+        event.preventDefault()
+        if (event.shiftKey) redo()
+        else undo()
+        return
+      }
+      if (mod && key === 'y') {
+        event.preventDefault()
+        redo()
+        return
+      }
+
       if (event.key.toLowerCase() === 'r' && !event.metaKey && !event.ctrlKey) {
         remix()
       }
@@ -40,7 +57,7 @@ export function Lab() {
     return () => {
       window.removeEventListener('keydown', down)
     }
-  }, [remix])
+  }, [redo, remix, undo])
 
   return (
     <div
@@ -104,6 +121,10 @@ export function Lab() {
 
 function Header() {
   const remix = useLab((state) => state.remix)
+  const undo = useLab((state) => state.undo)
+  const redo = useLab((state) => state.redo)
+  const canUndo = useLab((state) => state.past.length > 0)
+  const canRedo = useLab((state) => state.future.length > 0)
 
   return (
     <header
@@ -115,17 +136,34 @@ function Header() {
     >
       <div className="flex items-baseline gap-2.5">
         <span
-          className="font-mono text-[13px] tracking-[0.2em] uppercase"
+          className="font-mono text-[13px] tracking-[0.2em]"
           style={{ color: 'var(--color-ink)' }}
         >
           Framefield
         </span>
-        <span className="ff-value hidden sm:inline" style={{ fontSize: 10 }}>
-          local image lab
-        </span>
       </div>
 
       <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          className="ff-btn ff-btn-icon"
+          onClick={undo}
+          disabled={!canUndo}
+          title="Undo"
+          aria-label="Undo"
+        >
+          <Undo2 size={13} />
+        </button>
+        <button
+          type="button"
+          className="ff-btn ff-btn-icon"
+          onClick={redo}
+          disabled={!canRedo}
+          title="Redo"
+          aria-label="Redo"
+        >
+          <Redo2 size={13} />
+        </button>
         <button
           type="button"
           className="ff-btn"

@@ -59,6 +59,7 @@ export function isFullRange(mask: ToneMask): boolean {
 export interface Layer {
   id: string
   type: EffectType
+  name?: string
   enabled: boolean
   opacity: number
   blendMode: BlendMode

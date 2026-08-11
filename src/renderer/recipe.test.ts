@@ -4,6 +4,7 @@ import {
   createLayer,
   decodeRecipe,
   encodeRecipe,
+  randomizeFxStack,
   remixRecipe,
   sanitizeRecipe,
   SIZE_PRESETS,
@@ -112,6 +113,20 @@ describe('sanitizeRecipe', () => {
     })
     expect(result?.layers[0].params.levels).toBe(5)
   })
+
+  it('preserves valid layer names and drops empty ones', () => {
+    const result = sanitizeRecipe({
+      version: 1,
+      source: {},
+      canvas: { width: 100, height: 100 },
+      layers: [
+        { type: 'posterize', name: '  Ink pass  ' },
+        { type: 'dither', name: '   ' },
+      ],
+    })
+    expect(result?.layers[0].name).toBe('Ink pass')
+    expect(result?.layers[1].name).toBeUndefined()
+  })
 })
 
 describe('remixRecipe', () => {
@@ -162,13 +177,35 @@ describe('remixRecipe', () => {
   })
 })
 
+describe('randomizeFxStack', () => {
+  it('replaces only the layer stack', () => {
+    const before = createDefaultRecipe()
+    const after = randomizeFxStack(before)
+
+    expect(after.source).toEqual(before.source)
+    expect(after.canvas).toEqual(before.canvas)
+    expect(after.layers).not.toEqual(before.layers)
+    expect(after.layers.length).toBeGreaterThan(0)
+  })
+
+  it('survives its own sanitizer, so every FX stack is shareable', () => {
+    for (let i = 0; i < 200; i++) {
+      const recipe = randomizeFxStack(createDefaultRecipe())
+      expect(decodeRecipe(encodeRecipe(recipe))).toEqual(recipe)
+    }
+  })
+})
+
 describe('SIZE_PRESETS', () => {
-  it('cover the formats the PRD names', () => {
-    expect(SIZE_PRESETS.map((p) => `${p.width}x${p.height}`)).toEqual([
-      '1080x1080',
-      '1080x1350',
-      '1080x1920',
-      '1200x630',
+  it('cover the artwork aspects the export panel offers', () => {
+    expect(
+      SIZE_PRESETS.map((p) => `${p.aspect}:${p.width}x${p.height}`),
+    ).toEqual([
+      '1:1:1080x1080',
+      '4:5:1080x1350',
+      '9:16:1080x1920',
+      '16:9:1920x1080',
+      '1.91:1:1200x630',
     ])
   })
 })

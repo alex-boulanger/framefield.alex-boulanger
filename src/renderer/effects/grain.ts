@@ -3,7 +3,6 @@ import { whiteNoise, seedToInt } from '../noise'
 import { bool, num, str } from '../params'
 import type { ParamSpec } from '../params'
 import type { Params, RenderEnv } from '../types'
-import { scaled } from '../types'
 
 /**
  * Grain — film grain and paper texture, as a stackable layer.
@@ -82,18 +81,19 @@ export function applyGrain(
   const amount = num(params, 'amount', 0.15)
   if (amount <= 0) return buffer
 
-  const size = scaled(num(params, 'size', 1), env, 1)
+  const size = Math.max(1, num(params, 'size', 1))
   const colour = str(params, 'mode', 'mono') === 'colour'
   const multiply = str(params, 'blend', 'add') === 'multiply'
   const shadows = num(params, 'shadows', 0.3)
   const tintDark = bool(params, 'monochromeTint', false)
   const seed = seedToInt(str(params, 'seed', 'grain'))
+  const scale = env.scale > 0 ? env.scale : 1
 
   for (let y = 0; y < height; y++) {
-    const gy = Math.floor(y / size)
+    const gy = Math.floor(y / scale / size)
 
     for (let x = 0; x < width; x++) {
-      const gx = Math.floor(x / size)
+      const gx = Math.floor(x / scale / size)
       const i = (y * width + x) * 4
 
       const luma =

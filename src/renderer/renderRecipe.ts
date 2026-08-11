@@ -69,6 +69,7 @@ function drawCover(
   width: number,
   height: number,
 ) {
+  ctx.imageSmoothingEnabled = false
   const scale = Math.max(width / bitmap.width, height / bitmap.height)
   const drawWidth = bitmap.width * scale
   const drawHeight = bitmap.height * scale

@@ -1,14 +1,5 @@
 @import 'tailwindcss';
 
-/*
- * Framefield — dark technical instrument.
- *
- * The chrome recedes to near-black and desaturated greys so the canvas is the
- * only saturated thing on screen. One accent (signal orange) marks live state
- * and nothing else. Labels are small, uppercase, monospace: this is a control
- * surface, not a document.
- */
-
 @theme {
   --color-void: #08080a;
   --color-shell: #0d0d10;
@@ -35,6 +26,7 @@ html,
 body,
 #app {
   min-height: 100%;
+  overscroll-behavior: none;
 }
 
 body {
@@ -43,7 +35,6 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
-  overscroll-behavior: none;
 }
 
 @layer components {
@@ -53,7 +44,6 @@ body {
     font-size: 10px;
     line-height: 1;
     letter-spacing: 0.12em;
-    text-transform: uppercase;
     color: var(--color-faint);
   }
 
@@ -160,7 +150,6 @@ body {
     font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.06em;
-    text-transform: uppercase;
     white-space: nowrap;
     cursor: pointer;
     transition: color 120ms ease;

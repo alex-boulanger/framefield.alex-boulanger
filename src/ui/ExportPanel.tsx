@@ -2,7 +2,68 @@ import { useEffect, useState } from 'react'
 import { useLab } from '#/app/store'
 import { SIZE_PRESETS } from '#/renderer/recipe'
 import { renderToPngBlob } from '#/renderer/renderRecipe'
+import { Segmented } from './controls'
 import { Download, Loader2 } from 'lucide-react'
+import type { Recipe } from '#/renderer/types'
+
+function renderExportInWorker(recipe: Recipe, imageUrl: string | null) {
+  if (typeof Worker === 'undefined') {
+    return Promise.reject(new Error('Worker unavailable'))
+  }
+
+  return new Promise<Blob>((resolve, reject) => {
+    const worker = new Worker(
+      new URL('../renderer/render.worker.ts', import.meta.url),
+      { type: 'module' },
+    )
+    const id = 1
+
+    worker.onmessage = (
+      event: MessageEvent<
+        | { kind: 'preview'; id: number; image: ImageData; renderMs: number }
+        | { kind: 'export'; id: number; blob: Blob; renderMs: number }
+        | { kind: 'error'; id: number; error: string }
+      >,
+    ) => {
+      const message = event.data
+      if (message.id !== id) return
+      worker.terminate()
+
+      if (message.kind === 'export') {
+        resolve(message.blob)
+        return
+      }
+      reject(
+        new Error(message.kind === 'error' ? message.error : 'Export failed'),
+      )
+    }
+
+    worker.onerror = (event) => {
+      worker.terminate()
+      reject(new Error(event.message || 'Worker export failed'))
+    }
+
+    worker.postMessage({ kind: 'export', id, recipe, imageUrl })
+  })
+}
+
+async function decodeBitmap(imageUrl: string | null) {
+  if (!imageUrl) return null
+  const blob = await fetch(imageUrl).then((response) => response.blob())
+  return createImageBitmap(blob)
+}
+
+function downloadBlob(blob: Blob, recipe: Recipe) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  const seed = recipe.source.type === 'generator' ? recipe.source.seed : 'image'
+  link.href = url
+  link.download = `framefield-${seed}-${recipe.canvas.width}x${recipe.canvas.height}.png`
+  link.click()
+  // Revoking in the same tick can cancel the download before the browser has
+  // read the blob — Chrome tolerates it, Safari and Firefox do not.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
 
 /**
  * Export renders the recipe again at scale 1 rather than upscaling the preview,
@@ -15,49 +76,49 @@ export function ExportPanel() {
   const setCanvasSize = useLab((state) => state.setCanvasSize)
 
   const [busy, setBusy] = useState(false)
-  const [bitmap, setBitmap] = useState<ImageBitmap | null>(null)
 
-  // Export needs its own decode: the viewport's bitmap is local to that
-  // component, and export must not depend on the preview having rendered.
-  useEffect(() => {
-    if (!imageUrl) {
-      setBitmap(null)
-      return
-    }
-    let cancelled = false
-    fetch(imageUrl)
-      .then((response) => response.blob())
-      .then(createImageBitmap)
-      .then((result) => {
-        if (cancelled) result.close()
-        else setBitmap(result)
-      })
-      .catch(() => setBitmap(null))
-    return () => {
-      cancelled = true
-    }
-  }, [imageUrl])
+  const scaledSize = (
+    preset: (typeof SIZE_PRESETS)[number],
+    scale: number,
+  ) => ({
+    width: preset.width * scale,
+    height: preset.height * scale,
+  })
 
-  const activePreset = SIZE_PRESETS.find(
-    (preset) =>
-      preset.width === recipe.canvas.width &&
-      preset.height === recipe.canvas.height,
+  const activePreset = SIZE_PRESETS.find((preset) =>
+    [1, 2].some((scale) => {
+      const size = scaledSize(preset, scale)
+      return (
+        size.width === recipe.canvas.width &&
+        size.height === recipe.canvas.height
+      )
+    }),
   )
+  const activeScale =
+    activePreset &&
+    [1, 2].find((scale) => {
+      const size = scaledSize(activePreset, scale)
+      return (
+        size.width === recipe.canvas.width &&
+        size.height === recipe.canvas.height
+      )
+    })
 
   const exportPng = async () => {
     setBusy(true)
     try {
-      const blob = await renderToPngBlob({ recipe, bitmap })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      const seed =
-        recipe.source.type === 'generator' ? recipe.source.seed : 'image'
-      link.href = url
-      link.download = `framefield-${seed}-${recipe.canvas.width}x${recipe.canvas.height}.png`
-      link.click()
-      // Revoking in the same tick can cancel the download before the browser
-      // has read the blob — Chrome tolerates it, Safari and Firefox do not.
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      let blob: Blob
+      try {
+        blob = await renderExportInWorker(recipe, imageUrl)
+      } catch {
+        const bitmap = await decodeBitmap(imageUrl)
+        try {
+          blob = await renderToPngBlob({ recipe, bitmap })
+        } finally {
+          bitmap?.close()
+        }
+      }
+      downloadBlob(blob, recipe)
     } finally {
       setBusy(false)
     }
@@ -74,7 +135,10 @@ export function ExportPanel() {
             <button
               key={preset.id}
               type="button"
-              onClick={() => setCanvasSize(preset.width, preset.height)}
+              onClick={() => {
+                const size = scaledSize(preset, activeScale || 1)
+                setCanvasSize(size.width, size.height)
+              }}
               aria-pressed={active}
               className="flex cursor-pointer flex-col items-start gap-0.5 border px-2 py-1.5 transition-colors"
               style={{
@@ -85,20 +149,35 @@ export function ExportPanel() {
               }}
             >
               <span
-                className="font-mono text-[10px] tracking-widest uppercase"
+                className="font-mono text-[10px] tracking-widest"
                 style={{
                   color: active ? 'var(--color-signal)' : 'var(--color-muted)',
                 }}
               >
-                {preset.label}
+                {preset.aspect}
               </span>
               <span className="ff-value" style={{ fontSize: 10 }}>
-                {preset.width}×{preset.height}
+                {preset.label}
               </span>
             </button>
           )
         })}
       </div>
+
+      <Segmented
+        label="Scale"
+        value={`${activeScale || 1}x`}
+        options={[
+          { value: '1x', label: '1x' },
+          { value: '2x', label: '2x' },
+        ]}
+        onChange={(value) => {
+          const scale = value === '2x' ? 2 : 1
+          const preset = activePreset ?? SIZE_PRESETS[1]
+          const size = scaledSize(preset, scale)
+          setCanvasSize(size.width, size.height)
+        }}
+      />
 
       <div className="flex items-center gap-1.5">
         <NumberInput
@@ -124,7 +203,9 @@ export function ExportPanel() {
         ) : (
           <Download size={13} />
         )}
-        {busy ? 'Rendering' : 'Export PNG'}
+        {busy
+          ? 'Rendering'
+          : `Export PNG · ${recipe.canvas.width}×${recipe.canvas.height}`}
       </button>
     </div>
   )

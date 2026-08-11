@@ -156,6 +156,25 @@ describe('renderField', () => {
     expect(Array.from(clean.data)).not.toEqual(Array.from(grainy.data))
   })
 
+  it('anchors source grain in export-space coordinates', () => {
+    const options = params({
+      field: 'gradient',
+      shapes: 0,
+      grain: 0.5,
+      palette: ['#000000', '#ffffff'],
+    })
+    const full = renderField(options, env(64, 1))
+    const half = renderField(options, env(32, 0.5))
+
+    for (let y = 0; y < half.height; y++) {
+      for (let x = 0; x < half.width; x++) {
+        const halfIndex = (y * half.width + x) * 4
+        const fullIndex = (y * 2 * full.width + x * 2) * 4
+        expect(half.data[halfIndex]).toBeCloseTo(full.data[fullIndex], 6)
+      }
+    }
+  })
+
   it('respects the palette', () => {
     const buffer = renderField(
       params({ palette: ['#ff0000', '#ff0000'], grain: 0, shapes: 0 }),

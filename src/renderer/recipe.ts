@@ -13,15 +13,23 @@ import type { BlendMode, EffectType, Layer, Recipe, ToneMask } from './types'
 export interface SizePreset {
   id: string
   label: string
+  aspect: string
   width: number
   height: number
 }
 
 export const SIZE_PRESETS: Array<SizePreset> = [
-  { id: 'square', label: 'Square', width: 1080, height: 1080 },
-  { id: 'portrait', label: 'Portrait', width: 1080, height: 1350 },
-  { id: 'story', label: 'Story', width: 1080, height: 1920 },
-  { id: 'landscape', label: 'Landscape', width: 1200, height: 630 },
+  { id: 'square', label: 'Square', aspect: '1:1', width: 1080, height: 1080 },
+  {
+    id: 'portrait',
+    label: 'Portrait',
+    aspect: '4:5',
+    width: 1080,
+    height: 1350,
+  },
+  { id: 'story', label: 'Story', aspect: '9:16', width: 1080, height: 1920 },
+  { id: 'wide', label: 'Wide', aspect: '16:9', width: 1920, height: 1080 },
+  { id: 'social', label: 'Social', aspect: '1.91:1', width: 1200, height: 630 },
 ]
 
 let layerCounter = 0
@@ -87,14 +95,20 @@ export function createDefaultRecipe(): Recipe {
   }
 }
 
+function paletteFromRecipe(recipe: Recipe) {
+  const palette =
+    recipe.source.type === 'generator' ? recipe.source.params.palette : null
+  return Array.isArray(palette) ? palette : ['#050505', '#f5f5f5', '#0057ff']
+}
+
 /**
- * Remix: reseed the source and pick a fresh but coherent stack. Ranges stay
- * conservative on purpose — every remix should be usable, not merely different.
+ * Pick a fresh but coherent stack. Ranges stay conservative on purpose — every
+ * random stack should be usable, not merely different.
  */
-export function remixRecipe(current: Recipe): Recipe {
+export function randomizeFxStack(current: Recipe): Recipe {
   const seed = randomSeed()
   const rng = createRng(`${seed}:remix`)
-  const palette = rng.pick(PALETTES).colors
+  const palette = paletteFromRecipe(current)
 
   const layers: Array<Layer> = []
 
@@ -194,7 +208,17 @@ export function remixRecipe(current: Recipe): Recipe {
   // Never hand back an empty stack.
   if (layers.length === 0) layers.push(createLayer('posterize'))
 
-  return {
+  return { ...current, layers }
+}
+
+/**
+ * Remix: reseed the source and pick a fresh but coherent stack.
+ */
+export function remixRecipe(current: Recipe): Recipe {
+  const seed = randomSeed()
+  const rng = createRng(`${seed}:remix`)
+  const palette = rng.pick(PALETTES).colors
+  const withStack = randomizeFxStack({
     ...current,
     source:
       current.source.type === 'image'
@@ -205,7 +229,11 @@ export function remixRecipe(current: Recipe): Recipe {
             seed,
             params: randomizeField(seed, palette),
           },
-    layers,
+  })
+
+  return {
+    ...withStack,
+    source: withStack.source,
   }
 }
 
@@ -249,6 +277,10 @@ export function sanitizeRecipe(input: unknown): Recipe | null {
 
     layers.push({
       id: typeof layer.id === 'string' ? layer.id : createLayerId(),
+      name:
+        typeof layer.name === 'string' && layer.name.trim().length > 0
+          ? layer.name.trim().slice(0, 48)
+          : undefined,
       type,
       enabled: layer.enabled !== false,
       opacity:
