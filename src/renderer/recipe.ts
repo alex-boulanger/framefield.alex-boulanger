@@ -7,8 +7,8 @@ import {
 import { PALETTES } from './palettes'
 import { createRng, randomSeed } from './rng'
 import { roundParam, sanitizeParams } from './params'
-import { BLEND_MODES } from './types'
-import type { BlendMode, EffectType, Layer, Recipe } from './types'
+import { BLEND_MODES, NO_MASK } from './types'
+import type { BlendMode, EffectType, Layer, Recipe, ToneMask } from './types'
 
 export interface SizePreset {
   id: string
@@ -38,7 +38,29 @@ export function createLayer(type: EffectType): Layer {
     enabled: true,
     opacity: 1,
     blendMode: 'normal',
+    mask: { ...NO_MASK },
     params: effectDefaults(type),
+  }
+}
+
+/** Clamp an untrusted mask into a usable band. */
+export function sanitizeMask(input: unknown): ToneMask {
+  if (typeof input !== 'object' || input === null) return { ...NO_MASK }
+  const raw = input as Record<string, unknown>
+
+  const clamp = (value: unknown, fallback: number) =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, Math.min(1, value))
+      : fallback
+
+  const low = clamp(raw.low, 0)
+  const high = clamp(raw.high, 1)
+
+  return {
+    // Swap rather than reject: a reversed band is a slip, not an attack.
+    low: Math.min(low, high),
+    high: Math.max(low, high),
+    softness: clamp(raw.softness, 0),
   }
 }
 
@@ -132,6 +154,24 @@ export function remixRecipe(current: Recipe): Recipe {
     layers.push(layer)
   }
 
+  // ASCII and dither both quantize tone, so stacking them muddies each other.
+  // Offer ASCII only when the dither did not land.
+  if (layers.every((entry) => entry.type !== 'dither') && rng.bool(0.5)) {
+    const layer = createLayer('ascii')
+    layer.params = {
+      ...layer.params,
+      ramp: rng.pick(['classic', 'blocks', 'shades', 'minimal', 'dots']),
+      cellSize: rng.int(5, 14),
+      aspect: roundParam(rng.range(1.6, 2.2)),
+      contrast: roundParam(rng.range(-0.1, 0.4)),
+      edges: rng.bool(0.6) ? roundParam(rng.range(0.2, 0.6)) : 0,
+      mode: rng.pick(['duotone', 'duotone', 'mono', 'source']),
+      palette: [...palette],
+      invert: rng.bool(0.2),
+    }
+    layers.push(layer)
+  }
+
   if (rng.bool(0.45)) {
     const layer = createLayer('channel-drift')
     layer.opacity = roundParam(rng.range(0.5, 1))
@@ -218,6 +258,7 @@ export function sanitizeRecipe(input: unknown): Recipe | null {
       blendMode: BLEND_MODES.includes(layer.blendMode as BlendMode)
         ? (layer.blendMode as BlendMode)
         : 'normal',
+      mask: sanitizeMask(layer.mask),
       params: sanitizeParams(EFFECTS[type].params, layer.params),
     })
   }

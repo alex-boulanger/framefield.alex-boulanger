@@ -82,7 +82,7 @@ function drawCover(
   )
 }
 
-/** Render just the source, before any effects — used by the compare view. */
+/** Render just the source, before any effects. */
 export function renderSource(request: RenderRequest): PixelBuffer {
   const { recipe, bitmap } = request
   const env = envFor(recipe, request.scale ?? 1)
@@ -118,7 +118,7 @@ export function renderRecipe(request: RenderRequest): PixelBuffer {
 
     // The pass gets its own copy so the original survives as the blend base.
     const output = definition.apply(cloneBuffer(buffer), layer.params, env)
-    compositeInto(buffer, output, layer.opacity, layer.blendMode)
+    compositeInto(buffer, output, layer.opacity, layer.blendMode, layer.mask)
   }
 
   return buffer

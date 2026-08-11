@@ -218,11 +218,17 @@ export function TextInput({
   value,
   onChange,
   action,
+  placeholder,
+  maxLength,
+  mono,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   action?: React.ReactNode
+  placeholder?: string
+  maxLength?: number
+  mono?: boolean
 }) {
   return (
     <Field label={label}>
@@ -231,7 +237,13 @@ export function TextInput({
           className="ff-input"
           value={value}
           aria-label={label}
+          placeholder={placeholder}
+          maxLength={maxLength}
           spellCheck={false}
+          autoComplete="off"
+          // Ramps are read as a sequence of glyphs, so they need to be shown
+          // in the same kind of face they will be rendered in.
+          style={mono ? { letterSpacing: '0.08em' } : undefined}
           onChange={(event) => onChange(event.target.value)}
         />
         {action}

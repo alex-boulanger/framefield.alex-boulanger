@@ -28,8 +28,11 @@ src/
     buffer.ts   Float32 linear-light PixelBuffer, sRGB transfer, blur
     noise.ts    gradient noise, fBm, ridged, domain warp, curl, LIC
     masks.ts    Bayer + void-and-cluster blue-noise threshold masks
+    glyphAtlas.ts  rasterizes a ramp and measures each glyph's ink
+    presets.ts  curated recipes, rendered live as thumbnails
     generators/ field source (fBm / warp / ridge / flow / ramp + SDF shapes)
-    effects/    posterize, pixelate, dither, channel-drift
+    effects/    levels, posterize, pixelate, dither, halftone, ascii,
+                pixel-sort, displace, channel-drift, bloom, grain
   ui/           the instrument shell
 scripts/        static bundle assembly for deploy
 ```
@@ -48,9 +51,27 @@ Three rules keep this maintainable:
   Blend modes and posterize levels hop into perceptual space deliberately,
   because those are borrowed controls with borrowed expectations.
 
-Canvas is touched in exactly one place — decoding an imported bitmap. The
-generator is fully procedural (analytic SDFs, no rasterization), so the whole
-renderer is testable in node and resolution-independent by construction.
+Canvas is touched in exactly two places — decoding an imported bitmap, and
+rasterizing glyphs for ASCII. Everything else is procedural (analytic SDFs, no
+rasterization), so the renderer is testable in node and resolution-independent
+by construction.
+
+## ASCII ramps
+
+The ramp is ordered by **measured** ink coverage, not by how the string was
+typed. That is not pedantry: in the default monospace stack, `-` measures
+lighter than `:` and `%` lighter than `#`, both the reverse of the conventional
+` .:-=+*#%@`. Rasterizing each glyph at the current cell size and sorting by
+coverage means the ordering is right for the font actually in use — and it
+means an arbitrary custom ramp works without the user having to sort it.
+
+Premade: classic, blocks, shades, minimal, dots, binary, and a 68-character
+terminal ramp. Custom accepts any string of two or more characters, including
+multi-byte ones (block and braille glyphs count correctly — `[...str]`, not
+`.length`).
+
+Edge awareness substitutes `- / | \` where the local gradient is strong, which
+is what gives shapes contours instead of an even wash of tone.
 
 Each effect declares its params as a spec list; the controls panel, the
 defaults, and the URL sanitizer all read from that one declaration.
@@ -59,12 +80,26 @@ Layers composite: a pass runs on the buffer it receives, then the result is
 blended back over that input at the layer's opacity and blend mode. `opacity:
 0.9` on a dither layer means 90% dithered, not 90% opaque.
 
+## Tone masks
+
+Every layer carries a `mask` — a luma band with a soft edge — that restricts
+where it applies. "Dither the shadows, leave the highlights clean" is not
+something opacity can express, since opacity is uniform across the frame.
+
+The band is measured on the layer's **input**, not its output, so masks compose
+down the stack: each one reads whatever the layers beneath it produced. The
+identity is `{ low: 0, high: 1, softness: 0 }`, which short-circuits to the
+unmasked fast path, and recipes written before the field existed decode to it.
+
 ## Deploying
 
 Cloudflare Pages, static:
 
 - Build command: `bun run build`
 - Output directory: `dist`
+- Pages project: `framefield`
+- Production URL: `https://framefield.pages.dev`
+- Custom domain: `https://framefield.alex-boulanger.dev`
 
 `vite build` emits the prerendered SPA shell into `.output/public`;
 `scripts/static-bundle.mjs` lifts it into `dist` and adds the SPA `_redirects`
@@ -73,9 +108,14 @@ the natural home for this, but in the current nitro 3 beta they still attempt a
 server bundle and fail on Start's SPA html input — collapse the script into a
 preset once that lands.
 
+Deploys run from GitHub Actions on pushes to `main`. The `prod` GitHub
+environment must define `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+The workflow owns the Pages project and deployment; the custom domain
+association is configured in Cloudflare Pages, not in this repo.
+
 ## Tests
 
-`bun run test` — 224 tests, node only. No browser, no jsdom, no canvas mock: the
+`bun run test` — 370 tests, node only. No browser, no jsdom, no canvas mock: the
 renderer is pure functions over `Float32Array`, and `src/test/setup.ts` provides
 a small `ImageData` stand-in for the two conversion functions that need it.
 `renderRecipe` accepts a pre-rendered source, so even the full layer pipeline is
@@ -103,6 +143,12 @@ Several of these exist because they caught real bugs:
   high-passed white noise and ranked the residual, which sounds right and does
   essentially nothing: local density variance came out within 2% of plain white
   noise. Void-and-cluster replaced it.
+- **Every preset renders to something worth looking at.** Not blank, not blown
+  out, and with real tonal range. This caught two things at once: presets
+  silently losing their palette to the effect defaults, and Low-res collapsing
+  to a single flat colour at thumbnail size because a 12px pixelate cell is a
+  quarter of a 52px thumbnail. Thumbnails now render as true miniatures — full
+  canvas, scaled down — which is what the export-space param convention is for.
 
 The scale-fidelity block in `renderRecipe.test.ts` pins the decision the param
 model rests on, and includes a sensitivity check that fails if scaling ever
@@ -112,9 +158,9 @@ stops being applied.
 
 Milestones 1–2 are done: generated source, recipe model, layer stack with
 reorder/toggle/duplicate/delete, posterize + dither + channel drift, image
-import, compare, PNG export at size presets, and recipe URLs. The generator and
-the colour pipeline have since been rebuilt around continuous-tone fields in
-linear light.
+import, PNG export at size presets, and recipe URLs. The generator and the
+colour pipeline have since been rebuilt around continuous-tone fields in linear
+light.
 
 Generator cost, measured at preview (580×725) and export (1080×1350):
 

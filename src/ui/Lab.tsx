@@ -3,10 +3,11 @@ import { useLab } from '#/app/store'
 import { useRecipeUrl } from '#/app/useRecipeUrl'
 import { CanvasViewport } from './CanvasViewport'
 import { SourcePanel } from './SourcePanel'
+import { PresetStrip } from './PresetStrip'
 import { EffectStack } from './EffectStack'
 import { EffectControls } from './EffectControls'
 import { ExportPanel } from './ExportPanel'
-import { Shuffle, SplitSquareHorizontal } from 'lucide-react'
+import { Shuffle } from 'lucide-react'
 
 /**
  * App shell.
@@ -20,11 +21,7 @@ export function Lab() {
   useRecipeUrl()
 
   const remix = useLab((state) => state.remix)
-  const setComparing = useLab((state) => state.setComparing)
-  const comparing = useLab((state) => state.comparing)
 
-  // Hold to compare. Space is the obvious key for a momentary action, and
-  // keyup releasing it means the user never gets stuck in compare mode.
   useEffect(() => {
     const isTypingTarget = (target: EventTarget | null) =>
       target instanceof HTMLElement &&
@@ -34,31 +31,16 @@ export function Lab() {
 
     const down = (event: KeyboardEvent) => {
       if (isTypingTarget(event.target)) return
-      if (event.code === 'Space') {
-        event.preventDefault()
-        setComparing(true)
-      }
       if (event.key.toLowerCase() === 'r' && !event.metaKey && !event.ctrlKey) {
         remix()
       }
     }
 
-    const up = (event: KeyboardEvent) => {
-      if (event.code === 'Space') setComparing(false)
-    }
-
-    // Releasing outside the window would otherwise latch compare mode on.
-    const blur = () => setComparing(false)
-
     window.addEventListener('keydown', down)
-    window.addEventListener('keyup', up)
-    window.addEventListener('blur', blur)
     return () => {
       window.removeEventListener('keydown', down)
-      window.removeEventListener('keyup', up)
-      window.removeEventListener('blur', blur)
     }
-  }, [remix, setComparing])
+  }, [remix])
 
   return (
     <div
@@ -76,7 +58,15 @@ export function Lab() {
           }}
         >
           <div className="flex flex-col gap-5">
-            <SourcePanel />
+            {/* Above the source controls on purpose: this is the fastest route
+                to a good image, so it should be the first thing read. */}
+            <PresetStrip />
+            <div
+              className="border-t pt-5"
+              style={{ borderColor: 'var(--color-line)' }}
+            >
+              <SourcePanel />
+            </div>
             <div
               className="border-t pt-5"
               style={{ borderColor: 'var(--color-line)' }}
@@ -108,26 +98,6 @@ export function Lab() {
           </div>
         </aside>
       </div>
-
-      {/* Compare is a press-and-hold control, so it is a button with pointer
-          handlers rather than a toggle — matching the Space key behaviour. */}
-      <div className="pointer-events-none fixed right-4 bottom-16 z-10 lg:bottom-14">
-        <button
-          type="button"
-          className="ff-btn pointer-events-auto"
-          data-active={comparing}
-          style={{
-            color: comparing ? 'var(--color-signal)' : undefined,
-            borderColor: comparing ? 'var(--color-signal)' : undefined,
-          }}
-          onPointerDown={() => setComparing(true)}
-          onPointerUp={() => setComparing(false)}
-          onPointerLeave={() => setComparing(false)}
-        >
-          <SplitSquareHorizontal size={13} />
-          Compare
-        </button>
-      </div>
     </div>
   )
 }
@@ -156,12 +126,6 @@ function Header() {
       </div>
 
       <div className="flex items-center gap-1.5">
-        <span
-          className="ff-value mr-1 hidden md:inline"
-          style={{ fontSize: 10 }}
-        >
-          space · compare
-        </span>
         <button
           type="button"
           className="ff-btn"

@@ -32,6 +32,43 @@ export interface Rgb {
  * when the pipeline went linear — the palette module's only remaining job is
  * turning authored hex into numbers.
  */
+/**
+ * The darkest and lightest entries of a palette, by perceived lightness.
+ *
+ * Two-tone effects need an ink and a paper. Taking the first and last entries
+ * looks right — palettes are authored darkest-first — but the final entry is an
+ * *accent*, not the lightest: `['#050505', '#f5f5f5', '#0057ff']` ends on blue,
+ * which is darker than the white before it. Using the ends directly made
+ * duotone dither render black-on-blue and quietly discard the white.
+ */
+export function paletteExtremes(colors: Array<string>): {
+  dark: string
+  light: string
+} {
+  if (colors.length === 0) return { dark: '#000000', light: '#ffffff' }
+
+  let dark = colors[0]
+  let light = colors[0]
+  let darkest = Infinity
+  let lightest = -Infinity
+
+  for (const color of colors) {
+    const { r, g, b } = hexToRgb(color)
+    // Perceptual weighting, on the authored sRGB values.
+    const lightness = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    if (lightness < darkest) {
+      darkest = lightness
+      dark = color
+    }
+    if (lightness > lightest) {
+      lightest = lightness
+      light = color
+    }
+  }
+
+  return { dark, light }
+}
+
 export function hexToRgb(hex: string): Rgb {
   const clean = hex.replace('#', '')
   const full =

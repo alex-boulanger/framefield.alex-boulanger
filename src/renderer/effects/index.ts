@@ -1,6 +1,13 @@
+import { LEVELS_PARAMS, applyLevels } from './levels'
 import { POSTERIZE_PARAMS, applyPosterize } from './posterize'
 import { PIXELATE_PARAMS, applyPixelate } from './pixelate'
 import { DITHER_PARAMS, applyDither } from './dither'
+import { ASCII_PARAMS, applyAscii } from './ascii'
+import { HALFTONE_PARAMS, applyHalftone } from './halftone'
+import { PIXEL_SORT_PARAMS, applyPixelSort } from './pixelSort'
+import { DISPLACE_PARAMS, applyDisplace } from './displace'
+import { BLOOM_PARAMS, applyBloom } from './bloom'
+import { GRAIN_PARAMS, applyGrain } from './grain'
 import { CHANNEL_DRIFT_PARAMS, applyChannelDrift } from './channelDrift'
 import { defaultParams } from '../params'
 import type { ParamSpec } from '../params'
@@ -23,6 +30,13 @@ export interface EffectDefinition {
 }
 
 export const EFFECTS: Record<EffectType, EffectDefinition> = {
+  levels: {
+    type: 'levels',
+    label: 'Levels',
+    hint: 'Shape tone before the quantizing effects read it.',
+    params: LEVELS_PARAMS,
+    apply: applyLevels,
+  },
   posterize: {
     type: 'posterize',
     label: 'Posterize',
@@ -44,6 +58,48 @@ export const EFFECTS: Record<EffectType, EffectDefinition> = {
     params: DITHER_PARAMS,
     apply: applyDither,
   },
+  ascii: {
+    type: 'ascii',
+    label: 'ASCII',
+    hint: 'Map tone onto characters, ordered by measured ink.',
+    params: ASCII_PARAMS,
+    apply: applyAscii,
+  },
+  halftone: {
+    type: 'halftone',
+    label: 'Halftone',
+    hint: 'Rotated print screens, with a four-plate CMYK mode.',
+    params: HALFTONE_PARAMS,
+    apply: applyHalftone,
+  },
+  'pixel-sort': {
+    type: 'pixel-sort',
+    label: 'Pixel Sort',
+    hint: 'Reorder runs of pixels selected by a tone band.',
+    params: PIXEL_SORT_PARAMS,
+    apply: applyPixelSort,
+  },
+  displace: {
+    type: 'displace',
+    label: 'Displace',
+    hint: 'Push pixels around by a noise or flow field.',
+    params: DISPLACE_PARAMS,
+    apply: applyDisplace,
+  },
+  bloom: {
+    type: 'bloom',
+    label: 'Bloom',
+    hint: 'Bleed the highlights, in linear light.',
+    params: BLOOM_PARAMS,
+    apply: applyBloom,
+  },
+  grain: {
+    type: 'grain',
+    label: 'Grain',
+    hint: 'Film grain and paper texture.',
+    params: GRAIN_PARAMS,
+    apply: applyGrain,
+  },
   'channel-drift': {
     type: 'channel-drift',
     label: 'Channel Drift',
@@ -54,10 +110,17 @@ export const EFFECTS: Record<EffectType, EffectDefinition> = {
 }
 
 export const EFFECT_ORDER: Array<EffectType> = [
+  'levels',
   'posterize',
   'pixelate',
   'dither',
+  'halftone',
+  'ascii',
+  'pixel-sort',
+  'displace',
   'channel-drift',
+  'bloom',
+  'grain',
 ]
 
 export function effectDefaults(type: EffectType): Params {

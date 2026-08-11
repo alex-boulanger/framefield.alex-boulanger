@@ -20,7 +20,41 @@ export type ParamValue = number | string | boolean | Array<string>
 
 export type Params = Record<string, ParamValue>
 
-export type EffectType = 'posterize' | 'pixelate' | 'dither' | 'channel-drift'
+export type EffectType =
+  | 'levels'
+  | 'posterize'
+  | 'pixelate'
+  | 'dither'
+  | 'halftone'
+  | 'ascii'
+  | 'pixel-sort'
+  | 'displace'
+  | 'channel-drift'
+  | 'bloom'
+  | 'grain'
+
+/**
+ * Restricts a layer to a band of the tone it is applied over.
+ *
+ * "Dither the shadows, leave the highlights clean" is not expressible with
+ * opacity, which is uniform across the frame. Because the band is measured on
+ * the layer's *input*, masks compose down the stack: each one reads whatever
+ * the layers beneath it produced.
+ *
+ * `low: 0, high: 1, softness: 0` is the identity and the default.
+ */
+export interface ToneMask {
+  low: number
+  high: number
+  /** Width of the fade at each edge of the band, in tone units. */
+  softness: number
+}
+
+export const NO_MASK: ToneMask = { low: 0, high: 1, softness: 0 }
+
+export function isFullRange(mask: ToneMask): boolean {
+  return mask.low <= 0 && mask.high >= 1
+}
 
 export interface Layer {
   id: string
@@ -28,6 +62,7 @@ export interface Layer {
   enabled: boolean
   opacity: number
   blendMode: BlendMode
+  mask: ToneMask
   params: Params
 }
 

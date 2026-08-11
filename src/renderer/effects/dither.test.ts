@@ -5,6 +5,7 @@ import { srgbToLinear } from '../buffer'
 import {
   env,
   gradient,
+  hasUniformCells,
   meanLuminance,
   pixel,
   solid,
@@ -233,6 +234,59 @@ describe('applyDither', () => {
 
     expect(periodicity('bayer')).toBeCloseTo(1, 5)
     expect(periodicity('blue')).toBeLessThan(0.9)
+  })
+
+  /**
+   * Pixel size runs the dither on a coarser grid. At 1 it is the pixel grid,
+   * which is what error diffusion needs; above 1 it gives chunky dots without
+   * stacking a separate pixelate layer.
+   */
+  describe('pixel size', () => {
+    it.each(ALL)('%s paints uniform cells above size 1', (algorithm) => {
+      for (const pixelSize of [2, 4, 8]) {
+        const buffer = gradient(64, 64)
+        applyDither(
+          buffer,
+          { ...base(), algorithm, pixelSize, mode: 'mono' },
+          env(buffer),
+        )
+        expect(hasUniformCells(buffer, pixelSize)).toBe(true)
+      }
+    })
+
+    it('defaults to per-pixel', () => {
+      const buffer = gradient(64, 64)
+      applyDither(buffer, { ...base(), mode: 'mono' }, env(buffer))
+      expect(hasUniformCells(buffer, 2)).toBe(false)
+    })
+
+    it('scales the cell with the render scale', () => {
+      const buffer = gradient(64, 64)
+      applyDither(
+        buffer,
+        { ...base(), pixelSize: 8, mode: 'mono' },
+        env(buffer, 0.5),
+      )
+      expect(hasUniformCells(buffer, 4)).toBe(true)
+      expect(hasUniformCells(buffer, 8)).toBe(false)
+    })
+
+    it('still preserves mean tone when coarse', () => {
+      const buffer = solidSrgb(96, 96, 110, 110, 110)
+      applyDither(
+        buffer,
+        { ...base(), algorithm: 'blue', pixelSize: 4, mode: 'mono' },
+        env(buffer),
+      )
+      expect(meanLuminance(buffer)).toBeCloseTo(srgbToLinear(110 / 255), 1)
+    })
+
+    it('never collapses a cell below one pixel', () => {
+      const buffer = gradient(32, 32)
+      expect(() =>
+        applyDither(buffer, { ...base(), pixelSize: 1 }, env(buffer, 0.02)),
+      ).not.toThrow()
+    })
   })
 
   it('leaves alpha untouched', () => {

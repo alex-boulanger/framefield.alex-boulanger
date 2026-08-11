@@ -47,8 +47,16 @@ export interface SeedSpec extends BaseSpec {
   default: string
 }
 
+/** Free text. Unlike `seed` it carries no randomize affordance. */
+export interface TextSpec extends BaseSpec {
+  kind: 'text'
+  default: string
+  placeholder?: string
+  maxLength?: number
+}
+
 export type ParamSpec =
-  SliderSpec | ToggleSpec | SelectSpec | PaletteSpec | SeedSpec
+  SliderSpec | ToggleSpec | SelectSpec | PaletteSpec | SeedSpec | TextSpec
 
 /**
  * Round a generated param to a stable, serializable value.
@@ -145,6 +153,14 @@ export function sanitizeParams(
       case 'seed':
         params[spec.key] =
           typeof value === 'string' && value.length > 0 ? value : spec.default
+        break
+      case 'text':
+        // Length-capped: this arrives from a URL, and an unbounded string in a
+        // shared recipe is both a rendering hazard and a payload.
+        params[spec.key] =
+          typeof value === 'string' && value.length > 0
+            ? value.slice(0, spec.maxLength ?? 256)
+            : spec.default
         break
     }
   }

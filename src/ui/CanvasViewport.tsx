@@ -103,7 +103,6 @@ function previewScale(recipe: Recipe, boxWidth: number, boxHeight: number) {
 export function CanvasViewport() {
   const recipe = useLab((state) => state.recipe)
   const imageUrl = useLab((state) => state.imageUrl)
-  const comparing = useLab((state) => state.comparing)
   const bitmap = useSourceBitmap(imageUrl)
 
   const [boxRef, box] = useElementSize<HTMLDivElement>()
@@ -143,9 +142,7 @@ export function CanvasViewport() {
       }
       const sourceImage = sourceRef.current.image
 
-      const image = comparing
-        ? sourceImage
-        : renderRecipe({ recipe, bitmap, scale, sourceImage })
+      const image = renderRecipe({ recipe, bitmap, scale, sourceImage })
       putBuffer(canvas, image)
 
       setRenderMs(performance.now() - start)
@@ -154,7 +151,7 @@ export function CanvasViewport() {
     return () => {
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
     }
-  }, [recipe, bitmap, comparing, box.width, scale, sourceKey])
+  }, [recipe, bitmap, box.width, scale, sourceKey])
 
   const aspect = recipe.canvas.width / recipe.canvas.height
 
@@ -191,20 +188,6 @@ export function CanvasViewport() {
                 This recipe was shared with an imported image. Import one to
                 apply the stack.
               </p>
-            </div>
-          )}
-
-          {comparing && (
-            <div
-              className="absolute top-2 left-2 px-1.5 py-1"
-              style={{ background: 'var(--color-void)' }}
-            >
-              <span
-                className="ff-label"
-                style={{ color: 'var(--color-signal)' }}
-              >
-                Source
-              </span>
             </div>
           )}
         </div>

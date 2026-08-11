@@ -133,24 +133,35 @@ body {
     border-color: var(--color-signal-dim);
   }
 
-  /* Segmented control — replaces dropdowns for small option sets. */
+  /*
+   * Segmented control — replaces dropdowns for small option sets.
+   *
+   * Wraps rather than overflowing. With eight options (the ASCII ramp) a
+   * single row squeezes each label to a few pixels and clips the last one, so
+   * items claim a readable minimum width and flow onto a second row instead.
+   */
   .ff-seg {
     display: flex;
+    flex-wrap: wrap;
     border: 1px solid var(--color-line);
     background: var(--color-void);
   }
 
   .ff-seg-item {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 3.4em;
     height: 26px;
+    padding: 0 4px;
     background: transparent;
     border: none;
     border-right: 1px solid var(--color-line);
+    border-top: 1px solid transparent;
     color: var(--color-faint);
     font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    white-space: nowrap;
     cursor: pointer;
     transition: color 120ms ease;
   }

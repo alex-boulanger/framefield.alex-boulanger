@@ -59,6 +59,18 @@ export function ParamControl({
         />
       )
 
+    case 'text':
+      return (
+        <TextInput
+          label={spec.label}
+          value={typeof value === 'string' ? value : spec.default}
+          placeholder={spec.placeholder}
+          maxLength={spec.maxLength}
+          mono
+          onChange={onChange}
+        />
+      )
+
     case 'seed':
       return (
         <TextInput

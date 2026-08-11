@@ -2,7 +2,7 @@ import { useLab } from '#/app/store'
 import { EFFECTS } from '#/renderer/effects'
 import { ParamControl } from './ParamControl'
 import { Segmented, Slider } from './controls'
-import { BLEND_MODES } from '#/renderer/types'
+import { BLEND_MODES, isFullRange } from '#/renderer/types'
 import type { BlendMode } from '#/renderer/types'
 import { RotateCcw } from 'lucide-react'
 
@@ -19,6 +19,7 @@ export function EffectControls() {
   const setLayerParam = useLab((state) => state.setLayerParam)
   const setLayerOpacity = useLab((state) => state.setLayerOpacity)
   const setLayerBlendMode = useLab((state) => state.setLayerBlendMode)
+  const setLayerMask = useLab((state) => state.setLayerMask)
   const resetLayer = useLab((state) => state.resetLayer)
 
   const layer = layers.find((entry) => entry.id === selectedId)
@@ -33,6 +34,7 @@ export function EffectControls() {
   }
 
   const definition = EFFECTS[layer.type]
+  const masked = !isFullRange(layer.mask) || layer.mask.softness > 0
 
   return (
     <div className="flex flex-col gap-4">
@@ -70,6 +72,54 @@ export function EffectControls() {
             label: mode.slice(0, 4),
           }))}
           onChange={(value) => setLayerBlendMode(layer.id, value as BlendMode)}
+        />
+      </div>
+
+      {/* Tone mask: restrict the layer to a band of what it sits over. Grouped
+          with opacity and blend because all three govern how the pass is
+          composited, not what it does. */}
+      <div
+        className="flex flex-col gap-3.5 border-t pt-4"
+        style={{ borderColor: 'var(--color-line)' }}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="ff-label">Tone mask</span>
+          {masked && (
+            <button
+              type="button"
+              className="ff-value cursor-pointer bg-transparent"
+              style={{ color: 'var(--color-signal)' }}
+              onClick={() =>
+                setLayerMask(layer.id, { low: 0, high: 1, softness: 0 })
+              }
+            >
+              clear
+            </button>
+          )}
+        </div>
+        <Slider
+          label="From"
+          value={layer.mask.low}
+          min={0}
+          max={1}
+          step={0.01}
+          onChange={(value) => setLayerMask(layer.id, { low: value })}
+        />
+        <Slider
+          label="To"
+          value={layer.mask.high}
+          min={0}
+          max={1}
+          step={0.01}
+          onChange={(value) => setLayerMask(layer.id, { high: value })}
+        />
+        <Slider
+          label="Feather"
+          value={layer.mask.softness}
+          min={0}
+          max={0.5}
+          step={0.01}
+          onChange={(value) => setLayerMask(layer.id, { softness: value })}
         />
       </div>
 

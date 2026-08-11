@@ -8,12 +8,14 @@ import {
 import { effectDefaults } from '#/renderer/effects'
 import { randomizeField } from '#/renderer/generators/field'
 import { randomSeed } from '#/renderer/rng'
+import { NO_MASK } from '#/renderer/types'
 import type {
   BlendMode,
   EffectType,
   Layer,
   ParamValue,
   Recipe,
+  ToneMask,
 } from '#/renderer/types'
 
 /**
@@ -30,7 +32,6 @@ export interface LabState {
   selectedLayerId: string | null
   /** Object URL of the imported image, or null for generator sources. */
   imageUrl: string | null
-  comparing: boolean
 
   setRecipe: (recipe: Recipe) => void
   setCanvasSize: (width: number, height: number) => void
@@ -53,9 +54,8 @@ export interface LabState {
   setLayerParam: (id: string, key: string, value: ParamValue) => void
   setLayerOpacity: (id: string, opacity: number) => void
   setLayerBlendMode: (id: string, mode: BlendMode) => void
+  setLayerMask: (id: string, mask: Partial<ToneMask>) => void
   resetLayer: (id: string) => void
-
-  setComparing: (comparing: boolean) => void
 }
 
 const initialRecipe = createDefaultRecipe()
@@ -78,7 +78,6 @@ export const useLab = create<LabState>((set, get) => ({
   recipe: initialRecipe,
   selectedLayerId: initialRecipe.layers[0]?.id ?? null,
   imageUrl: null,
-  comparing: false,
 
   setRecipe: (recipe) =>
     set((state) => ({
@@ -257,17 +256,33 @@ export const useLab = create<LabState>((set, get) => ({
       })),
     })),
 
+  setLayerMask: (id, mask) =>
+    set((state) => ({
+      recipe: mapLayer(state.recipe, id, (layer) => {
+        const next = { ...layer.mask, ...mask }
+        // Keep the band ordered while dragging so the two handles can cross
+        // without the layer blinking out.
+        return {
+          ...layer,
+          mask: {
+            low: Math.min(next.low, next.high),
+            high: Math.max(next.low, next.high),
+            softness: next.softness,
+          },
+        }
+      }),
+    })),
+
   resetLayer: (id) =>
     set((state) => ({
       recipe: mapLayer(state.recipe, id, (layer) => ({
         ...layer,
         opacity: 1,
         blendMode: 'normal',
+        mask: { ...NO_MASK },
         params: effectDefaults(layer.type),
       })),
     })),
-
-  setComparing: (comparing) => set({ comparing }),
 }))
 
 export const DEFAULT_SIZE = SIZE_PRESETS[1]
