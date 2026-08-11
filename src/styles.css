@@ -1,0 +1,250 @@
+@import 'tailwindcss';
+
+/*
+ * Framefield — dark technical instrument.
+ *
+ * The chrome recedes to near-black and desaturated greys so the canvas is the
+ * only saturated thing on screen. One accent (signal orange) marks live state
+ * and nothing else. Labels are small, uppercase, monospace: this is a control
+ * surface, not a document.
+ */
+
+@theme {
+  --color-void: #08080a;
+  --color-shell: #0d0d10;
+  --color-panel: #121216;
+  --color-raised: #1a1a20;
+  --color-line: #26262e;
+  --color-ink: #e8e8ec;
+  --color-muted: #8a8a96;
+  --color-faint: #5a5a66;
+  --color-signal: #ff5c1a;
+  --color-signal-dim: #7a3316;
+
+  --font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, monospace;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+@layer components {
+  /* Section label: the repeated small-caps monospace tag above every group. */
+  .ff-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-faint);
+  }
+
+  .ff-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ff-panel {
+    background: var(--color-panel);
+    border: 1px solid var(--color-line);
+  }
+
+  /* Buttons stay quiet until hovered — no filled CTAs anywhere in the shell. */
+  .ff-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    background: var(--color-raised);
+    border: 1px solid var(--color-line);
+    color: var(--color-muted);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition:
+      color 120ms ease,
+      border-color 120ms ease,
+      background 120ms ease;
+  }
+
+  .ff-btn:hover:not(:disabled) {
+    color: var(--color-ink);
+    border-color: #3a3a46;
+    background: #20202a;
+  }
+
+  .ff-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .ff-btn-icon {
+    width: 28px;
+    padding: 0;
+  }
+
+  .ff-btn-accent {
+    color: var(--color-signal);
+    border-color: var(--color-signal-dim);
+  }
+
+  .ff-btn-accent:hover:not(:disabled) {
+    color: var(--color-signal);
+    border-color: var(--color-signal);
+    background: #241209;
+  }
+
+  .ff-input {
+    height: 28px;
+    width: 100%;
+    padding: 0 8px;
+    background: var(--color-void);
+    border: 1px solid var(--color-line);
+    color: var(--color-ink);
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  .ff-input:focus {
+    outline: none;
+    border-color: var(--color-signal-dim);
+  }
+
+  /* Segmented control — replaces dropdowns for small option sets. */
+  .ff-seg {
+    display: flex;
+    border: 1px solid var(--color-line);
+    background: var(--color-void);
+  }
+
+  .ff-seg-item {
+    flex: 1;
+    height: 26px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--color-line);
+    color: var(--color-faint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 120ms ease;
+  }
+
+  .ff-seg-item:last-child {
+    border-right: none;
+  }
+
+  .ff-seg-item:hover {
+    color: var(--color-muted);
+  }
+
+  .ff-seg-item[data-active='true'] {
+    background: var(--color-raised);
+    color: var(--color-signal);
+  }
+}
+
+/*
+ * Range inputs are styled by hand rather than replaced with a custom pointer
+ * widget: native ranges already give keyboard support, and the quality bar asks
+ * for unbroken keyboard interaction.
+ */
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  background: transparent;
+  cursor: ew-resize;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--color-line);
+}
+
+input[type='range']::-moz-range-track {
+  height: 2px;
+  background: var(--color-line);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 3px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 0;
+  background: var(--color-ink);
+  border: none;
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 3px;
+  height: 14px;
+  border-radius: 0;
+  background: var(--color-ink);
+  border: none;
+}
+
+input[type='range']:hover::-webkit-slider-thumb,
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  background: var(--color-signal);
+}
+
+input[type='range']:hover::-moz-range-thumb,
+input[type='range']:focus-visible::-moz-range-thumb {
+  background: var(--color-signal);
+}
+
+input[type='range']:focus-visible {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 1px solid var(--color-signal);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-void);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border: 3px solid var(--color-void);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a46;
+}
