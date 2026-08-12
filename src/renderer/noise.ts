@@ -371,3 +371,164 @@ export function lic(
 
   return sum / count
 }
+
+/* -------------------------------------------------------------------------
+ * Cellular (Worley)
+ * ---------------------------------------------------------------------- */
+
+export type CellMode = 'f1' | 'edge' | 'blocks'
+
+/**
+ * Cellular noise — cells, plates and cracks.
+ *
+ * Here because the other fields are all the same primitive underneath: `fbm`,
+ * `ridged` and `warped` are gradient noise with different post-processing, so
+ * they share a family resemblance of soft isotropic blobs. This is built from
+ * *distance to scattered points* instead, which gives hard cell walls and flat
+ * interiors — structure the quantizing effects have nothing like to chew on
+ * otherwise.
+ *
+ * Three modes, because the distance metric changes the result completely:
+ *
+ * - `f1` — distance to the nearest point. Rounded stones.
+ * - `edge` — the gap between the nearest two, which is near zero exactly on a
+ *   cell boundary. This is the crack pattern people mean by "Voronoi".
+ * - `blocks` — `f1` under a Chebyshev metric, which makes the cells
+ *   rectilinear rather than round.
+ *
+ * The 3x3 neighbourhood is what makes it affordable: one jittered point per
+ * lattice cell means the nearest two are always within one cell of the sample.
+ */
+export function cellular(
+  x: number,
+  y: number,
+  seed: number,
+  mode: CellMode = 'f1',
+): number {
+  const cellX = Math.floor(x)
+  const cellY = Math.floor(y)
+  const chebyshev = mode === 'blocks'
+
+  let nearest = Infinity
+  let second = Infinity
+
+  for (let oy = -1; oy <= 1; oy++) {
+    for (let ox = -1; ox <= 1; ox++) {
+      const gx = cellX + ox
+      const gy = cellY + oy
+      // Two decorrelated hashes place the point inside its own cell, so no
+      // cell is ever empty and the density stays even.
+      const h = hash2(gx, gy, seed)
+      const px = gx + (h & 0xffff) / 0xffff
+      const py = gy + ((h >>> 16) & 0xffff) / 0xffff
+
+      const dx = px - x
+      const dy = py - y
+      const distance = chebyshev
+        ? Math.max(Math.abs(dx), Math.abs(dy))
+        : Math.hypot(dx, dy)
+
+      if (distance < nearest) {
+        second = nearest
+        nearest = distance
+      } else if (distance < second) {
+        second = distance
+      }
+    }
+  }
+
+  if (mode === 'edge') {
+    // 0 on a cell wall, rising into the interior. Scaled to fill the range —
+    // the raw gap rarely exceeds ~0.7 with one point per cell.
+    return Math.min(1, (second - nearest) * 1.6)
+  }
+  // `f1` on a unit lattice tops out around 0.9; the scale keeps the tails from
+  // sitting unused, which matters because the effects read this as tone.
+  return Math.min(1, nearest * 1.25)
+}
+
+/**
+ * Octaves of cellular noise: fewer, and falling away faster, than gradient fBm.
+ *
+ * Both departures are the difference between cells and mush. Cellular structure
+ * lives in the *first* octave — the cell walls — and each further octave adds
+ * walls at twice the density. Stacked five deep at the usual halving, the
+ * result is indistinguishable from fBm: the thing that made it worth adding is
+ * exactly what averages away. Measured on a contact sheet, `f1` and `blocks`
+ * both came out as generic soft noise until this was capped.
+ *
+ * So: at most three octaves, and a 0.35 falloff that leaves the base layer
+ * dominant. The `octaves` control still does something, it just cannot destroy
+ * the field it is modulating.
+ */
+const CELL_OCTAVE_CAP = 3
+const CELL_FALLOFF = 0.35
+
+export function cellularFbm(
+  x: number,
+  y: number,
+  seed: number,
+  mode: CellMode,
+  options: { octaves?: number } = {},
+): number {
+  const octaves = Math.max(
+    1,
+    Math.min(CELL_OCTAVE_CAP, options.octaves ?? CELL_OCTAVE_CAP),
+  )
+  let sum = 0
+  let amplitude = 1
+  let total = 0
+  let frequency = 1
+
+  for (let i = 0; i < octaves; i++) {
+    sum +=
+      cellular(x * frequency, y * frequency, seed + i * 1013, mode) * amplitude
+    total += amplitude
+    amplitude *= CELL_FALLOFF
+    frequency *= 2
+  }
+
+  return sum / total
+}
+
+/* -------------------------------------------------------------------------
+ * Interference
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Sums of rotated sine gratings — moiré.
+ *
+ * The one field here with *hard periodic* structure, which matters because it
+ * is what the halftone, dither and pixelate passes react most strongly to:
+ * beating a regular screen against a regular field is where moiré comes from,
+ * and none of the noise fields can produce it.
+ *
+ * Cheap by construction — a few trig calls per pixel, no lattice, no octaves —
+ * so it is the least expensive field after the plain ramp.
+ */
+export function interference(
+  x: number,
+  y: number,
+  seed: number,
+  waves: number,
+  skew: number,
+): number {
+  const count = Math.max(1, Math.min(6, Math.round(waves)))
+  let sum = 0
+
+  for (let i = 0; i < count; i++) {
+    // Angles from the seed rather than evenly spaced: evenly spaced gratings
+    // produce a regular plaid, and the interesting patterns come from the
+    // near-misses.
+    const h = hash2(i, 0, seed)
+    const angle = ((h & 0xffff) / 0xffff) * Math.PI
+    // Each grating a little different in frequency, which is what makes the
+    // beat pattern rather than a single reinforced stripe.
+    const frequency = 1 + i * skew + ((h >>> 16) & 0xff) / 255
+    sum += Math.sin(
+      (x * Math.cos(angle) + y * Math.sin(angle)) * frequency * Math.PI * 2,
+    )
+  }
+
+  return sum / count / 2 + 0.5
+}

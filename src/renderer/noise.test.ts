@@ -10,6 +10,9 @@ import {
   seedToInt,
   warped,
   whiteNoise,
+  cellular,
+  cellularFbm,
+  interference,
 } from './noise'
 
 const SEED = seedToInt('test')
@@ -290,5 +293,94 @@ describe('lic', () => {
       if (Math.abs(a - b) > 1e-6) changes++
     }
     expect(changes).toBeGreaterThan(150)
+  })
+})
+
+describe('cellular', () => {
+  it('stays inside 0..1', () => {
+    for (const mode of ['f1', 'edge', 'blocks'] as const) {
+      for (let i = 0; i < 400; i++) {
+        const value = cellular(i * 0.37, i * 0.71, 99, mode)
+        expect(value, mode).toBeGreaterThanOrEqual(0)
+        expect(value, mode).toBeLessThanOrEqual(1)
+      }
+    }
+  })
+
+  it('is deterministic', () => {
+    expect(cellular(1.5, 2.5, 7, 'edge')).toBe(cellular(1.5, 2.5, 7, 'edge'))
+  })
+
+  it('gives each mode a genuinely different field', () => {
+    const sample = (mode: 'f1' | 'edge' | 'blocks') =>
+      Array.from({ length: 64 }, (_, i) =>
+        cellular((i % 8) * 0.6, Math.floor(i / 8) * 0.6, 3, mode).toFixed(4),
+      ).join()
+    expect(new Set([sample('f1'), sample('edge'), sample('blocks')]).size).toBe(
+      3,
+    )
+  })
+
+  /** Cracks: near zero on a wall, and using most of the range overall. */
+  it('uses its range', () => {
+    let min = Infinity
+    let max = -Infinity
+    for (let y = 0; y < 60; y++) {
+      for (let x = 0; x < 60; x++) {
+        const value = cellular(x * 0.17, y * 0.17, 11, 'edge')
+        min = Math.min(min, value)
+        max = Math.max(max, value)
+      }
+    }
+    expect(min).toBeLessThan(0.15)
+    expect(max).toBeGreaterThan(0.6)
+  })
+
+  it('varies with the seed', () => {
+    expect(cellular(1.3, 2.7, 1, 'f1')).not.toBe(cellular(1.3, 2.7, 2, 'f1'))
+  })
+
+  it('stacks octaves without leaving the range', () => {
+    for (let i = 0; i < 200; i++) {
+      const value = cellularFbm(i * 0.31, i * 0.19, 5, 'edge', { octaves: 5 })
+      expect(value).toBeGreaterThanOrEqual(0)
+      expect(value).toBeLessThanOrEqual(1)
+    }
+  })
+})
+
+describe('interference', () => {
+  it('stays inside 0..1', () => {
+    for (let i = 0; i < 500; i++) {
+      const value = interference(i * 0.13, i * 0.29, 42, 4, 0.4)
+      expect(value).toBeGreaterThanOrEqual(0)
+      expect(value).toBeLessThanOrEqual(1)
+    }
+  })
+
+  /** The point of the field: hard periodic structure, not noise. */
+  it('is periodic rather than random', () => {
+    // One grating repeats along its own axis; sampling a line finds the tone
+    // returning rather than wandering.
+    const line = Array.from({ length: 200 }, (_, i) =>
+      interference(i * 0.02, 0, 1, 1, 0),
+    )
+    const mean = line.reduce((a, b) => a + b, 0) / line.length
+    // A sine sum averages to the midpoint; white noise would too, so also
+    // check it actually swings.
+    expect(mean).toBeCloseTo(0.5, 1)
+    expect(Math.max(...line) - Math.min(...line)).toBeGreaterThan(0.8)
+  })
+
+  it('is deterministic and seed-dependent', () => {
+    expect(interference(1, 2, 5, 3, 0.5)).toBe(interference(1, 2, 5, 3, 0.5))
+    expect(interference(1, 2, 5, 3, 0.5)).not.toBe(
+      interference(1, 2, 6, 3, 0.5),
+    )
+  })
+
+  it('clamps the wave count rather than trusting it', () => {
+    expect(Number.isFinite(interference(1, 1, 3, 0, 0.5))).toBe(true)
+    expect(Number.isFinite(interference(1, 1, 3, 99, 0.5))).toBe(true)
   })
 })

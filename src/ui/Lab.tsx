@@ -9,6 +9,7 @@ import {
 } from '#/app/panelLayout'
 import { CanvasViewport } from './CanvasViewport'
 import { PresetStrip } from './PresetStrip'
+import { VariationGrid } from './VariationGrid'
 import { LayerStack } from './LayerStack'
 import { LayerInspector } from './LayerInspector'
 import { ExportPanel } from './ExportPanel'
@@ -176,16 +177,34 @@ export function Lab() {
             background: 'var(--color-shell)',
           }}
         >
-          <div className="flex flex-col gap-5">
-            {/* First thing read: the fastest route to a good image. Layer
-                editing lives on the right, with the stack it edits. */}
-            <PresetStrip />
+          <div className="flex min-h-full flex-col gap-5">
+            {/* Ordered by fastest route to a good image: variations of what
+                is already on screen, then saved and curated starting points.
+                Layer editing lives on the right, with the stack it edits. */}
+            <VariationGrid />
+            <div
+              className="border-t pt-5"
+              style={{ borderColor: 'var(--color-line)' }}
+            >
+              <PresetStrip />
+            </div>
             <div
               className="border-t pt-5"
               style={{ borderColor: 'var(--color-line)' }}
             >
               <ExportPanel />
             </div>
+            <a
+              className="mt-auto border-t pt-4 font-mono text-[11px] leading-relaxed text-[var(--color-muted)] transition-colors hover:text-[var(--color-ink)]"
+              href="https://alex-boulanger.dev/"
+              rel="noreferrer"
+              target="_blank"
+              style={{ borderColor: 'var(--color-line)' }}
+            >
+              Made with ❤️ and 🤖 by
+              <br />
+              Alex Boulanger
+            </a>
           </div>
         </aside>
 

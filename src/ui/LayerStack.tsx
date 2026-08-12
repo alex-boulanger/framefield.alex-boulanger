@@ -22,6 +22,8 @@ import {
   Focus,
   GripVertical,
   Image as ImageIcon,
+  Lock,
+  LockOpen,
   Pencil,
   Plus,
   Shuffle,
@@ -58,6 +60,7 @@ export function LayerStack() {
   const randomizeFxStack = useLab((state) => state.randomizeFxStack)
   const soloLayerId = useLab((state) => state.soloLayerId)
   const toggleSolo = useLab((state) => state.toggleSolo)
+  const toggleLayerLock = useLab((state) => state.toggleLayerLock)
 
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -127,6 +130,7 @@ export function LayerStack() {
                   onSelect={() => selectLayer(layer.id)}
                   onToggle={() => toggleLayer(layer.id)}
                   onSolo={() => toggleSolo(layer.id)}
+                  onLock={() => toggleLayerLock(layer.id)}
                   onDuplicate={() => duplicateLayer(layer.id)}
                   onRemove={() => removeLayer(layer.id)}
                   onRename={(name) => setLayerName(layer.id, name)}
@@ -236,6 +240,7 @@ function StackRow({
   onSelect,
   onToggle,
   onSolo,
+  onLock,
   onDuplicate,
   onRemove,
   onRename,
@@ -246,6 +251,7 @@ function StackRow({
   onSelect: () => void
   onToggle: () => void
   onSolo: () => void
+  onLock: () => void
   onDuplicate: () => void
   onRemove: () => void
   onRename: (name: string) => void
@@ -263,7 +269,7 @@ function StackRow({
   } = useSortable({ id: layer.id })
   const label = layer.name ?? layerTypeLabel(layer)
   /** Whether the row's controls are on screen, which the subtitle defers to. */
-  const showActions = selected || editing || soloed
+  const showActions = selected || editing || soloed || Boolean(layer.locked)
 
   const commitName = () => {
     onRename(draft)
@@ -362,7 +368,7 @@ function StackRow({
           </button>
         )}
 
-        <div className="relative flex h-4 min-w-0 items-center justify-between gap-2 px-1">
+        <div className="relative flex h-4 min-w-0 items-center px-1">
           {/*
             The subtitle: what the layer *is*, under whatever it is called.
 
@@ -376,7 +382,7 @@ function StackRow({
             hovering a row never reflows the text in it.
           */}
           <span
-            className={`ff-label min-w-0 truncate ${
+            className={`ff-label w-full min-w-0 truncate ${
               showActions ? 'invisible' : 'group-hover:invisible'
             }`}
             style={{ fontSize: 9 }}
@@ -392,12 +398,28 @@ function StackRow({
           {/* Actions stay hidden until hover or selection so the stack reads as
               a list rather than a toolbar grid. */}
           <div
-            className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+            // Absolutely positioned so it takes no width from the subtitle.
+            // The two are exactly complementary — the subtitle goes `invisible`
+            // in precisely the states these become visible — so overlaying is
+            // free, and it is what lets the subtitle keep the full line. Five
+            // icons sharing the row is what truncated "Dither" to "Di…".
+            className="absolute inset-y-0 right-0 flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
             // A soloed row keeps its actions visible whether or not it is
             // selected: solo changes what the whole viewport shows, so the
             // control that turns it off must never be hidden behind a hover.
             style={{ opacity: showActions ? 1 : undefined }}
           >
+            <StackAction
+              title={
+                layer.locked
+                  ? 'Unlock — remix may change this layer'
+                  : 'Lock — remix will leave this layer alone'
+              }
+              onClick={onLock}
+              active={Boolean(layer.locked)}
+            >
+              {layer.locked ? <Lock size={12} /> : <LockOpen size={12} />}
+            </StackAction>
             <StackAction
               title={soloed ? 'Leave solo' : 'Solo this layer'}
               onClick={onSolo}

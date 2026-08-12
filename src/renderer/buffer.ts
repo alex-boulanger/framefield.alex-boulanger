@@ -298,6 +298,46 @@ export function blurPlane(
 }
 
 /**
+ * Bilinear sample of one channel of an RGBA buffer, clamped or wrapped.
+ *
+ * Shared by every pass that reads from a coordinate it computed rather than the
+ * one it is writing — displacement and transform so far. Two copies of a
+ * bilinear filter is two chances to get the edge handling subtly different.
+ */
+export function sampleChannel(
+  data: Float32Array,
+  width: number,
+  height: number,
+  x: number,
+  y: number,
+  channel: number,
+  wrap: boolean,
+): number {
+  const fold = (v: number, limit: number) => {
+    if (wrap) return ((v % limit) + limit) % limit
+    return v < 0 ? 0 : v > limit - 1 ? limit - 1 : v
+  }
+
+  const fx = fold(x, width)
+  const fy = fold(y, height)
+  const x0 = Math.floor(fx)
+  const y0 = Math.floor(fy)
+  const x1 = fold(x0 + 1, width)
+  const y1 = fold(y0 + 1, height)
+  const tx = fx - x0
+  const ty = fy - y0
+
+  const i00 = (y0 * width + x0) * 4 + channel
+  const i10 = (y0 * width + x1) * 4 + channel
+  const i01 = (y1 * width + x0) * 4 + channel
+  const i11 = (y1 * width + x1) * 4 + channel
+
+  const top = data[i00] + (data[i10] - data[i00]) * tx
+  const bottom = data[i01] + (data[i11] - data[i01]) * tx
+  return top + (bottom - top) * ty
+}
+
+/**
  * Bilinear resample of a single-channel plane.
  *
  * For fields that are expensive per sample but smooth by construction — a LIC

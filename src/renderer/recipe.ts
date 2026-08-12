@@ -8,7 +8,7 @@ import { IMAGE_DEFAULTS, IMAGE_PARAMS } from './layers/image'
 import { PALETTES } from './palettes'
 import { createRng, randomSeed } from './rng'
 import { roundParam, sanitizeParams } from './params'
-import { BLEND_MODES, NO_MASK, isSourceLayer } from './types'
+import { BLEND_MODES, NO_MASK, NO_SHAPE, isSourceLayer } from './types'
 import type {
   BlendMode,
   CanvasSize,
@@ -19,6 +19,7 @@ import type {
   Layer,
   LayerBase,
   Recipe,
+  ShapeMask,
   ToneMask,
 } from './types'
 
@@ -59,6 +60,7 @@ function layerBase(): Omit<LayerBase, 'params'> {
     opacity: 1,
     blendMode: 'normal',
     mask: { ...NO_MASK },
+    shape: { ...NO_SHAPE },
   }
 }
 
@@ -176,6 +178,33 @@ export function sanitizeMask(input: unknown): ToneMask {
   }
 }
 
+/** Clamp an untrusted shape mask. Anything unrecognized decodes to the identity. */
+export function sanitizeShapeMask(input: unknown): ShapeMask {
+  if (typeof input !== 'object' || input === null) return { ...NO_SHAPE }
+  const raw = input as Record<string, unknown>
+
+  const shape =
+    raw.shape === 'linear' || raw.shape === 'radial' ? raw.shape : 'none'
+  const clamp = (value: unknown, fallback: number, min: number, max: number) =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(min, Math.min(max, value))
+      : fallback
+
+  const low = clamp(raw.low, 0, 0, 1)
+  const high = clamp(raw.high, 1, 0, 1)
+
+  return {
+    shape,
+    // Wrapped rather than clamped: an angle is cyclic, so 400° is 40°.
+    angle: ((clamp(raw.angle, 0, -3600, 3600) % 360) + 360) % 360,
+    centerX: clamp(raw.centerX, 0, -0.5, 0.5),
+    centerY: clamp(raw.centerY, 0, -0.5, 0.5),
+    low: Math.min(low, high),
+    high: Math.max(low, high),
+    softness: clamp(raw.softness, 0, 0, 1),
+  }
+}
+
 export const DEFAULT_CANVAS: CanvasSize = { width: 1080, height: 1350 }
 
 /**
@@ -280,6 +309,42 @@ export function randomizeFxStack(current: Recipe): Recipe {
     layers.push(layer)
   }
 
+  /*
+   * Gradient map as an alternative to posterize, not an addition: both map the
+   * palette onto tone, and stacking them just re-quantizes a recolour.
+   */
+  if (layers.length === 0 && rng.bool(0.5)) {
+    const layer = createEffectLayer('gradient-map')
+    layer.params = {
+      ...layer.params,
+      amount: 1,
+      gamma: roundParam(rng.range(0.7, 1.6)),
+      contrast: roundParam(rng.range(-0.1, 0.4)),
+      invert: rng.bool(0.2),
+      palette: [...palette],
+    }
+    layers.push(layer)
+  }
+
+  /*
+   * Contour turns the picture into line work, which is a whole-image decision
+   * rather than a treatment — so it is rare, and never stacked on a quantizer
+   * that has already flattened the tone it needs to trace.
+   */
+  if (layers.length === 0 && rng.bool(0.18)) {
+    const layer = createEffectLayer('contour')
+    layer.params = {
+      ...layer.params,
+      mode: rng.bool(0.8) ? 'contour' : 'edges',
+      levels: rng.int(6, 22),
+      thickness: roundParam(rng.range(1, 2.4), 1),
+      gain: roundParam(rng.range(1.1, 2.4), 1),
+      invert: rng.bool(0.35),
+      palette: [...palette],
+    }
+    layers.push(layer)
+  }
+
   // Pixelate occasionally, and always before the dither so the dither has
   // flat cells to work across rather than the other way round.
   if (rng.bool(0.25)) {
@@ -339,6 +404,34 @@ export function randomizeFxStack(current: Recipe): Recipe {
     layers.push(layer)
   }
 
+  /**
+   * Transform, sparingly and gently.
+   *
+   * Geometry is the one thing here that can make a stack unrecognisable rather
+   * than merely different, and remix output is now what the app opens on. So:
+   * a low probability, symmetry and kaleidoscope favoured over zoom and offset
+   * (they compose rather than crop), and no offset at all — pushing the subject
+   * off-frame is the failure mode a random transform reaches for first.
+   */
+  if (rng.bool(0.22)) {
+    const layer = createEffectLayer('transform')
+    const kaleido = rng.bool(0.45) ? rng.pick([3, 4, 6, 8]) : 0
+    layer.params = {
+      ...layer.params,
+      symmetry: kaleido > 0 ? 'none' : rng.pick(['x', 'y', 'quad']),
+      kaleido,
+      rotate: rng.bool(0.3) ? rng.pick([90, 180, 270]) : 0,
+      zoom: roundParam(rng.range(0.9, 1.6)),
+      tile: rng.bool(0.2) ? rng.int(2, 3) : 1,
+      offsetX: 0,
+      offsetY: 0,
+      flipX: false,
+      flipY: false,
+      wrap: true,
+    }
+    layers.push(layer)
+  }
+
   if (rng.bool(0.45)) {
     const layer = createEffectLayer('channel-drift')
     layer.opacity = roundParam(rng.range(0.5, 1))
@@ -358,34 +451,64 @@ export function randomizeFxStack(current: Recipe): Recipe {
     layers.push(layer)
   }
 
+  // A light sharpen after the quantizers, occasionally: it puts an edge back
+  // on a dithered image without changing what the image is.
+  if (rng.bool(0.18)) {
+    const layer = createEffectLayer('focus')
+    layer.params = {
+      ...layer.params,
+      mode: rng.bool(0.65) ? 'sharpen' : 'blur',
+      radius: rng.int(2, 10),
+      amount: roundParam(rng.range(0.3, 1)),
+    }
+    layers.push(layer)
+  }
+
   // Never hand back an empty stack.
   if (layers.length === 0) layers.push(createEffectLayer('posterize'))
 
-  // Source layers are the composition; only the treatment is rerolled. Their
-  // order is preserved and the new effects go on top, which is where a stack
-  // built by hand would have put them.
-  return {
-    ...current,
-    layers: withGeneratedNames([
-      ...current.layers.filter(isSourceLayer),
-      ...layers,
-    ]),
-  }
+  /**
+   * Source layers are the composition; only the treatment is rerolled. Locked
+   * effects survive too, which is the whole point of a lock — "keep this
+   * dither, reroll everything else".
+   *
+   * Kept layers hold their relative order and the new effects go on top, which
+   * is where a stack built by hand would have put them. A locked layer that was
+   * on top therefore ends up underneath the reroll; that is a deliberate
+   * simplification, since the alternative is guessing at an interleaving.
+   */
+  const kept = current.layers.filter(
+    (layer) => isSourceLayer(layer) || layer.locked,
+  )
+  return { ...current, layers: withGeneratedNames([...kept, ...layers]) }
 }
 
 /**
  * Remix: reseed the generators and pick a fresh but coherent stack.
  */
-export function remixRecipe(current: Recipe): Recipe {
+export interface RemixOptions {
+  /** Keep the stack's current colourway instead of picking a new one. */
+  lockPalette?: boolean
+}
+
+export function remixRecipe(
+  current: Recipe,
+  options: RemixOptions = {},
+): Recipe {
   const seed = randomSeed()
   const rng = createRng(`${seed}:remix`)
-  const palette = rng.pick(PALETTES).colors
+  const palette = options.lockPalette
+    ? paletteFromRecipe(current)
+    : rng.pick(PALETTES).colors
 
   const sources = current.layers.filter(isSourceLayer)
   const generators = sources.filter((layer) => layer.kind === 'generator')
 
   const reseeded = sources.map((layer, index) =>
-    layer.kind === 'generator'
+    // A locked source keeps its seed and its parameters untouched. Its palette
+    // is left alone too: rerolling the colourway of a layer the user pinned
+    // would defeat the lock in the most visible way possible.
+    layer.kind === 'generator' && !layer.locked
       ? {
           ...layer,
           // Distinct seeds per generator, so stacked fields do not come out as
@@ -402,7 +525,10 @@ export function remixRecipe(current: Recipe): Recipe {
       ? [{ ...createGeneratorLayer(seed), params: randomizeField(seed, palette) }]
       : reseeded
 
-  return randomizeFxStack({ ...current, layers })
+  return randomizeFxStack({
+    ...current,
+    layers: [...layers, ...current.layers.filter((l) => !isSourceLayer(l))],
+  })
 }
 
 /**
@@ -531,6 +657,8 @@ function sanitizeLayer(input: unknown): Layer | null {
       ? (raw.blendMode as BlendMode)
       : 'normal',
     mask: sanitizeMask(raw.mask),
+    shape: sanitizeShapeMask(raw.shape),
+    locked: raw.locked === true ? true : undefined,
   }
 
   if (kind === 'effect') {

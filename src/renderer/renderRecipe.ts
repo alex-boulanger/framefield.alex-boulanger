@@ -204,6 +204,7 @@ export function renderStack(request: RenderRequest): StackResult {
         layer.blendMode,
         layer.mask,
         'full',
+        layer.shape,
       )
       continue
     }
@@ -217,6 +218,7 @@ export function renderStack(request: RenderRequest): StackResult {
       layer.blendMode,
       layer.mask,
       'alpha',
+      layer.shape,
     )
   }
 

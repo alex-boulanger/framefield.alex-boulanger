@@ -30,9 +30,11 @@ src/
     masks.ts    Bayer + void-and-cluster blue-noise threshold masks
     glyphAtlas.ts  rasterizes a ramp and measures each glyph's ink
     presets.ts  curated recipes, rendered live as thumbnails
-    generators/ field source (fBm / warp / ridge / flow / ramp + SDF shapes)
-    effects/    levels, posterize, pixelate, dither, halftone, ascii,
-                pixel-sort, displace, channel-drift, bloom, grain
+    generators/ field source (fBm / warp / ridge / flow / cells / moiré /
+                ramp + SDF shapes), with pan and rotate placement
+    effects/    levels, posterize, gradient-map, pixelate, dither, halftone,
+                ascii, pixel-sort, contour, focus, transform, displace,
+                channel-drift, bloom, grain
   ui/           the instrument shell
 scripts/        static bundle assembly for deploy
 ```
@@ -174,11 +176,18 @@ the document around a unified layer stack where generators, imports, and effects
 are peers rather than a privileged source followed by effects
 (`.scratch/unified-layer-stack-v2/spec.md`).
 
-Shipped: eleven effects — levels, posterize, pixelate, dither, halftone, ASCII,
-pixel sort, displace, channel drift, bloom, grain — plus per-layer opacity,
-blend modes and tone masks, drag-to-reorder, image import, curated presets and
-saved local presets rendered live, undo/redo, remix and randomize-FX, recipe
-URLs, PNG export at size presets, and the Web Worker render path.
+Shipped: fifteen effects — levels, posterize, gradient map, pixelate, dither,
+halftone, ASCII, pixel sort, contour, blur/sharpen, transform, displace,
+channel drift, bloom, grain — plus per-layer opacity, blend modes, **tone and
+shape masks**, layer locks, drag-to-reorder, image import, a live variation
+grid, curated and saved presets, undo/redo, remix and randomize-FX, share URLs,
+PNG export at size presets, and the Web Worker render path.
+
+Two masks per layer, and they multiply. The tone mask asks _which tones_; the
+shape mask asks _which part of the frame_, as a linear or radial field banded
+by the same `low`/`high`/`softness` controls — so a band in the middle of a
+linear field is a soft stripe, and one at the top of a radial field is a ring.
+"Dither the shadows, but only along the bottom edge" needs both.
 
 ### Rendering
 

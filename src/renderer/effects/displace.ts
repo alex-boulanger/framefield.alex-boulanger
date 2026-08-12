@@ -1,3 +1,4 @@
+import { sampleChannel } from '../buffer'
 import type { PixelBuffer } from '../buffer'
 import { buildFlowField, fbm, sampleFlowField, seedToInt } from '../noise'
 import { bool, num, str } from '../params'
@@ -68,40 +69,6 @@ export const DISPLACE_PARAMS: Array<ParamSpec> = [
   { kind: 'seed', key: 'seed', label: 'Seed', default: 'melt' },
   { kind: 'toggle', key: 'wrap', label: 'Wrap edges', default: false },
 ]
-
-/** Bilinear sample of one channel, clamped or wrapped. */
-function sample(
-  data: Float32Array,
-  width: number,
-  height: number,
-  x: number,
-  y: number,
-  channel: number,
-  wrap: boolean,
-): number {
-  const fold = (v: number, limit: number) => {
-    if (wrap) return ((v % limit) + limit) % limit
-    return v < 0 ? 0 : v > limit - 1 ? limit - 1 : v
-  }
-
-  const fx = fold(x, width)
-  const fy = fold(y, height)
-  const x0 = Math.floor(fx)
-  const y0 = Math.floor(fy)
-  const x1 = fold(x0 + 1, width)
-  const y1 = fold(y0 + 1, height)
-  const tx = fx - x0
-  const ty = fy - y0
-
-  const i00 = (y0 * width + x0) * 4 + channel
-  const i10 = (y0 * width + x1) * 4 + channel
-  const i01 = (y1 * width + x0) * 4 + channel
-  const i11 = (y1 * width + x1) * 4 + channel
-
-  const top = data[i00] + (data[i10] - data[i00]) * tx
-  const bottom = data[i01] + (data[i11] - data[i01]) * tx
-  return top + (bottom - top) * ty
-}
 
 export function applyDisplace(
   buffer: PixelBuffer,
@@ -183,7 +150,7 @@ export function applyDisplace(
         // displacement rather than a fixed offset.
         for (let c = 0; c < 3; c++) {
           const factor = 1 + (c - 1) * split * 0.5
-          data[i + c] = sample(
+          data[i + c] = sampleChannel(
             source,
             width,
             height,
@@ -196,9 +163,9 @@ export function applyDisplace(
       } else {
         const sx = x + dx * amount
         const sy = y + dy * amount
-        data[i] = sample(source, width, height, sx, sy, 0, wrap)
-        data[i + 1] = sample(source, width, height, sx, sy, 1, wrap)
-        data[i + 2] = sample(source, width, height, sx, sy, 2, wrap)
+        data[i] = sampleChannel(source, width, height, sx, sy, 0, wrap)
+        data[i + 1] = sampleChannel(source, width, height, sx, sy, 1, wrap)
+        data[i + 2] = sampleChannel(source, width, height, sx, sy, 2, wrap)
       }
     }
   }

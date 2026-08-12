@@ -23,11 +23,15 @@ export type Params = Record<string, ParamValue>
 export type EffectType =
   | 'levels'
   | 'posterize'
+  | 'gradient-map'
   | 'pixelate'
   | 'dither'
   | 'halftone'
   | 'ascii'
   | 'pixel-sort'
+  | 'contour'
+  | 'focus'
+  | 'transform'
   | 'displace'
   | 'channel-drift'
   | 'bloom'
@@ -57,6 +61,48 @@ export function isFullRange(mask: ToneMask): boolean {
 }
 
 /**
+ * Restricts a layer to a *region* of the frame, rather than a range of tone.
+ *
+ * The tone mask answers "which tones", and until this there was no way to ask
+ * "which part of the picture" — an effect applied to the whole frame or to a
+ * tonal band of it, never to the bottom third or the centre.
+ *
+ * Deliberately reuses the tone mask's `low`/`high`/`softness` band rather than
+ * being a plain gradient. The shape produces a 0..1 field — distance along an
+ * axis, or distance from a point — and the band selects within it. That costs
+ * no new concepts and buys strictly more: a band in the middle of a linear
+ * field is a soft stripe, and a band at the top of a radial one is a ring.
+ *
+ * `shape: 'none'` is the identity, and recipes written before the field existed
+ * decode to it.
+ */
+export interface ShapeMask {
+  shape: 'none' | 'linear' | 'radial'
+  /** Direction of a linear field, in degrees. */
+  angle: number
+  /** Centre of a radial field, as an offset from the frame centre. */
+  centerX: number
+  centerY: number
+  low: number
+  high: number
+  softness: number
+}
+
+export const NO_SHAPE: ShapeMask = {
+  shape: 'none',
+  angle: 0,
+  centerX: 0,
+  centerY: 0,
+  low: 0,
+  high: 1,
+  softness: 0,
+}
+
+export function isShapeless(mask: ShapeMask): boolean {
+  return mask.shape === 'none' || (mask.low <= 0 && mask.high >= 1)
+}
+
+/**
  * Everything in the stack is a layer, and every layer carries the same
  * controls. A generator is not a privileged "source" that effects hang off —
  * it is a layer that happens to make its own pixels, which is what lets two
@@ -69,6 +115,16 @@ export interface LayerBase {
   opacity: number
   blendMode: BlendMode
   mask: ToneMask
+  /** Where in the frame the layer applies. Multiplies with `mask`. */
+  shape: ShapeMask
+  /**
+   * Held fixed by remix and randomize.
+   *
+   * On the layer rather than in UI state so it survives a share link: handing
+   * someone a recipe with "keep this field, reroll the treatment" already
+   * expressed is more useful than handing them the bare stack.
+   */
+  locked?: boolean
   params: Params
 }
 

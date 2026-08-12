@@ -1,7 +1,7 @@
 import { fromPerceptual, luma, toPerceptual } from './buffer'
 import type { PixelBuffer } from './buffer'
-import { isFullRange } from './types'
-import type { BlendMode, ToneMask } from './types'
+import { isFullRange, isShapeless } from './types'
+import type { BlendMode, ShapeMask, ToneMask } from './types'
 
 /**
  * Layer compositing.
@@ -67,6 +67,7 @@ export function compositeInto(
   mode: BlendMode,
   mask?: ToneMask,
   coverage: Coverage = 'full',
+  shape?: ShapeMask,
 ): void {
   const alpha = Math.max(0, Math.min(1, opacity))
   if (alpha === 0) return
@@ -74,10 +75,17 @@ export function compositeInto(
   const b = base.data
   const t = top.data
   const banded = mask !== undefined && !isFullRange(mask)
+  const shaped = shape !== undefined && !isShapeless(shape)
 
   // Fast path: a full-strength unmasked normal pass is just the effect output.
   // Only sound for `full` coverage — a source layer's holes must not be copied.
-  if (alpha === 1 && mode === 'normal' && !banded && coverage === 'full') {
+  if (
+    alpha === 1 &&
+    mode === 'normal' &&
+    !banded &&
+    !shaped &&
+    coverage === 'full'
+  ) {
     b.set(t)
     return
   }
@@ -85,11 +93,25 @@ export function compositeInto(
   const op = CHANNEL_OPS[mode]
   const plain = mode === 'normal'
   const byAlpha = coverage === 'alpha'
+  const width = base.width
+  // One closure that answers "how much does this layer apply *here*", with the
+  // field sampler and the band folded together so the pixel loop makes a single
+  // call and TypeScript keeps the narrowing.
+  const shapeWeightAt = shaped
+    ? (
+        (sample) => (x: number, y: number) =>
+          maskWeight(shape, sample(x, y))
+      )(shapeFieldSampler(shape, width, base.height))
+    : null
 
   for (let i = 0; i < b.length; i += 4) {
     // The band is measured on the *base* — what the layer was applied over —
     // so the mask selects by the tone the user can see beneath it.
-    const weight = banded ? maskWeight(mask, luma(base, i)) : 1
+    let weight = banded ? maskWeight(mask, luma(base, i)) : 1
+    if (weight > 0 && shapeWeightAt) {
+      const pixel = i >> 2
+      weight *= shapeWeightAt(pixel % width, (pixel / width) | 0)
+    }
     if (weight <= 0) continue
     const strength = byAlpha ? alpha * weight * t[i + 3] : alpha * weight
     if (strength <= 0) continue
@@ -114,10 +136,62 @@ export function compositeInto(
 }
 
 /**
+ * The 0..1 field a shape mask bands over, as a closure with the per-frame
+ * constants hoisted out of the pixel loop.
+ *
+ * Both fields are normalized so that 0 and 1 are the extremes *of this frame*:
+ * a linear field spans exactly the frame at any angle, and a radial one reaches
+ * 1 at the farthest corner. Without that, `high: 1` would quietly exclude the
+ * corners on a 4:5 canvas and a 45° gradient would clip.
+ */
+export function shapeFieldSampler(
+  mask: ShapeMask,
+  width: number,
+  height: number,
+): (x: number, y: number) => number {
+  const aspect = width / height
+  // Sampled at pixel *centres*, so the field is symmetric about the frame: with
+  // `x / width` the first pixel sits exactly on 0 while the last falls short of
+  // 1, and a band at 0.5 splits the frame one pixel off-centre.
+  const u = (x: number) => (x + 0.5) / width
+  const v = (y: number) => (y + 0.5) / height
+
+  if (mask.shape === 'radial') {
+    const cx = 0.5 + mask.centerX
+    const cy = 0.5 + mask.centerY
+    // Farthest corner from the centre, so the field always reaches 1.
+    const maxRadius =
+      Math.max(
+        Math.hypot((0 - cx) * aspect, 0 - cy),
+        Math.hypot((1 - cx) * aspect, 0 - cy),
+        Math.hypot((0 - cx) * aspect, 1 - cy),
+        Math.hypot((1 - cx) * aspect, 1 - cy),
+      ) || 1
+
+    return (x, y) => Math.hypot((u(x) - cx) * aspect, v(y) - cy) / maxRadius
+  }
+
+  const radians = (mask.angle * Math.PI) / 180
+  const dx = Math.cos(radians)
+  const dy = Math.sin(radians)
+  // Half-extent of the projection across the frame, so the span is exactly 0..1
+  // whatever the angle.
+  const half = (Math.abs(dx) + Math.abs(dy)) / 2 || 1
+
+  return (x, y) => 0.5 + ((u(x) - 0.5) * dx + (v(y) - 0.5) * dy) / (2 * half)
+}
+
+/**
  * How much of the layer applies at this tone: 1 inside the band, 0 outside,
  * smoothstepped across `softness` at each edge.
+ *
+ * Shared by both masks — the shape mask bands over a spatial field with exactly
+ * this logic, which is why it takes a bare value rather than a tone.
  */
-export function maskWeight(mask: ToneMask, tone: number): number {
+export function maskWeight(
+  mask: Pick<ToneMask, 'low' | 'high' | 'softness'>,
+  tone: number,
+): number {
   const { low, high, softness } = mask
   if (softness <= 0) return tone >= low && tone <= high ? 1 : 0
 

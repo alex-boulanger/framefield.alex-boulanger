@@ -3,8 +3,13 @@ import { PALETTES } from '#/renderer/palettes'
 import { ParamControl } from './ParamControl'
 import { Segmented, Slider } from './controls'
 import { layerHint, layerSpecs, layerTypeLabel } from './layerMeta'
-import { BLEND_MODES, isFullRange } from '#/renderer/types'
-import type { BlendMode, Layer } from '#/renderer/types'
+import {
+  BLEND_MODES,
+  NO_SHAPE,
+  isFullRange,
+  isShapeless,
+} from '#/renderer/types'
+import type { BlendMode, Layer, ShapeMask } from '#/renderer/types'
 import { Dices, ImageOff, RotateCcw } from 'lucide-react'
 
 /**
@@ -23,6 +28,7 @@ export function LayerInspector() {
   const setLayerOpacity = useLab((state) => state.setLayerOpacity)
   const setLayerBlendMode = useLab((state) => state.setLayerBlendMode)
   const setLayerMask = useLab((state) => state.setLayerMask)
+  const setLayerShape = useLab((state) => state.setLayerShape)
   const resetLayer = useLab((state) => state.resetLayer)
   const reseedLayer = useLab((state) => state.reseedLayer)
   const randomizeLayer = useLab((state) => state.randomizeLayer)
@@ -39,6 +45,7 @@ export function LayerInspector() {
   }
 
   const masked = !isFullRange(layer.mask) || layer.mask.softness > 0
+  const shaped = !isShapeless(layer.shape)
   const missingAsset = layer.kind === 'image' && !assets[layer.asset]
 
   return (
@@ -164,6 +171,110 @@ export function LayerInspector() {
         />
       </div>
 
+      {/* Shape mask: *where* in the frame the layer applies, as opposed to the
+          tone mask's *which tones*. The two multiply, so "dither the shadows,
+          but only along the bottom edge" is expressible with both set. */}
+      <div
+        className="flex flex-col gap-3.5 border-t pt-4"
+        style={{ borderColor: 'var(--color-line)' }}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="ff-label">Shape mask</span>
+          {shaped && (
+            <button
+              type="button"
+              className="ff-value cursor-pointer bg-transparent"
+              style={{ color: 'var(--color-signal)' }}
+              onClick={() => setLayerShape(layer.id, { ...NO_SHAPE })}
+            >
+              clear
+            </button>
+          )}
+        </div>
+        <Segmented
+          label="Shape"
+          value={layer.shape.shape}
+          options={[
+            { value: 'none', label: 'Off' },
+            { value: 'linear', label: 'Linear' },
+            { value: 'radial', label: 'Radial' },
+          ]}
+          onChange={(value) =>
+            setLayerShape(layer.id, {
+              shape: value as ShapeMask['shape'],
+              // Opening the mask with a full band would show no change at all
+              // and read as broken, so the first use lands on half the frame.
+              ...(value !== 'none' && isShapeless(layer.shape)
+                ? { low: 0, high: 0.5, softness: 0.15 }
+                : {}),
+            })
+          }
+        />
+
+        {layer.shape.shape !== 'none' && (
+          <>
+            {layer.shape.shape === 'linear' ? (
+              <Slider
+                label="Angle"
+                value={layer.shape.angle}
+                min={0}
+                max={359}
+                step={1}
+                unit="°"
+                onChange={(value) => setLayerShape(layer.id, { angle: value })}
+              />
+            ) : (
+              <>
+                <Slider
+                  label="Centre X"
+                  value={layer.shape.centerX}
+                  min={-0.5}
+                  max={0.5}
+                  step={0.01}
+                  onChange={(value) =>
+                    setLayerShape(layer.id, { centerX: value })
+                  }
+                />
+                <Slider
+                  label="Centre Y"
+                  value={layer.shape.centerY}
+                  min={-0.5}
+                  max={0.5}
+                  step={0.01}
+                  onChange={(value) =>
+                    setLayerShape(layer.id, { centerY: value })
+                  }
+                />
+              </>
+            )}
+            <Slider
+              label="From"
+              value={layer.shape.low}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(value) => setLayerShape(layer.id, { low: value })}
+            />
+            <Slider
+              label="To"
+              value={layer.shape.high}
+              min={0}
+              max={1}
+              step={0.01}
+              onChange={(value) => setLayerShape(layer.id, { high: value })}
+            />
+            <Slider
+              label="Feather"
+              value={layer.shape.softness}
+              min={0}
+              max={0.5}
+              step={0.01}
+              onChange={(value) => setLayerShape(layer.id, { softness: value })}
+            />
+          </>
+        )}
+      </div>
+
       <div
         className="border-t pt-4"
         style={{ borderColor: 'var(--color-line)' }}
@@ -222,7 +333,11 @@ function PalettePicker({
             style={{ borderColor: 'var(--color-line)' }}
           >
             {palette.colors.map((color) => (
-              <span key={color} className="flex-1" style={{ background: color }} />
+              <span
+                key={color}
+                className="flex-1"
+                style={{ background: color }}
+              />
             ))}
           </button>
         ))}

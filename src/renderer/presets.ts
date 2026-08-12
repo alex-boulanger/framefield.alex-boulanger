@@ -1,7 +1,7 @@
 import { effectDefaults } from './effects'
 import { FIELD_DEFAULTS } from './generators/field'
 import { DEFAULT_BACKGROUND, withGeneratedNames } from './recipe'
-import { NO_MASK } from './types'
+import { NO_MASK, NO_SHAPE } from './types'
 import type { EffectType, Layer, Params, Recipe, ToneMask } from './types'
 
 /**
@@ -232,6 +232,75 @@ export const PRESETS: Array<Preset> = [
     ],
   },
   {
+    id: 'prism',
+    name: 'Prism',
+    seed: 'prism0606',
+    source: {
+      field: 'warp',
+      scale: 2.0,
+      warp: 1.9,
+      octaves: 5,
+      shapes: 3,
+      shapeScale: 0.5,
+      contrast: 0.25,
+      grain: 0,
+      palette: ['#04070f', '#dce6ff', '#2b4bff'],
+    },
+    layers: [
+      // Kaleidoscope first, then quantize: folding a posterized image repeats
+      // its flat bands and reads as a printing error, where folding the
+      // continuous field and *then* posterizing gives the seams real tone to
+      // step through.
+      { type: 'transform', params: { kaleido: 6, zoom: 1.25 } },
+      { type: 'posterize', params: { levels: 6, mode: 'duotone' } },
+      { type: 'grain', params: { amount: 0.1, size: 1 } },
+    ],
+  },
+  {
+    id: 'relief',
+    name: 'Relief',
+    seed: 'relief770',
+    source: {
+      field: 'cellular',
+      cellMode: 'edge',
+      scale: 3.6,
+      octaves: 2,
+      shapes: 0,
+      contrast: 0.2,
+      grain: 0,
+      palette: ['#12100e', '#e8e0d4', '#a4907c'],
+    },
+    layers: [
+      // Contour needs continuous tone to trace, so it reads the field
+      // directly — anything that quantizes first leaves it nothing but the
+      // band edges to find.
+      { type: 'contour', params: { mode: 'contour', levels: 14, gain: 1.8 } },
+      // And a gentle sharpen, because the lines are the whole image here.
+      { type: 'focus', params: { mode: 'sharpen', radius: 3, amount: 0.6 } },
+    ],
+  },
+  {
+    id: 'wash',
+    name: 'Wash',
+    seed: 'wash4120',
+    source: {
+      field: 'moire',
+      scale: 1.6,
+      waves: 3,
+      skew: 0.5,
+      shapes: 0,
+      contrast: 0.1,
+      grain: 0,
+      palette: ['#0a0014', '#ffe0f7', '#ff2e9a'],
+    },
+    layers: [
+      // Blur first: softening the grating turns hard interference into the
+      // broad tonal beat the gradient map then colours.
+      { type: 'focus', params: { mode: 'blur', radius: 6, amount: 1 } },
+      { type: 'gradient-map', params: { gamma: 1.1, contrast: 0.2 } },
+    ],
+  },
+  {
     id: 'engrave',
     name: 'Engrave',
     seed: 'engr1120',
@@ -297,6 +366,7 @@ export function recipeFromPreset(
       opacity: entry.opacity ?? 1,
       blendMode: 'normal',
       mask: { ...(entry.mask ?? NO_MASK) },
+      shape: { ...NO_SHAPE },
       params: { ...defaults, ...inherited, ...entry.params },
     }
   })
@@ -310,6 +380,7 @@ export function recipeFromPreset(
     opacity: 1,
     blendMode: 'normal',
     mask: { ...NO_MASK },
+    shape: { ...NO_SHAPE },
     params: { ...FIELD_DEFAULTS(), ...preset.source, seed: preset.seed },
   }
 

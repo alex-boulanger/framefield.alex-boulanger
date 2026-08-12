@@ -1,10 +1,14 @@
 import { LEVELS_PARAMS, applyLevels } from './levels'
 import { POSTERIZE_PARAMS, applyPosterize } from './posterize'
+import { GRADIENT_MAP_PARAMS, applyGradientMap } from './gradientMap'
+import { CONTOUR_PARAMS, applyContour } from './contour'
+import { FOCUS_PARAMS, applyFocus } from './focus'
 import { PIXELATE_PARAMS, applyPixelate } from './pixelate'
 import { DITHER_PARAMS, applyDither } from './dither'
 import { ASCII_PARAMS, applyAscii } from './ascii'
 import { HALFTONE_PARAMS, applyHalftone } from './halftone'
 import { PIXEL_SORT_PARAMS, applyPixelSort } from './pixelSort'
+import { TRANSFORM_PARAMS, applyTransform } from './transform'
 import { DISPLACE_PARAMS, applyDisplace } from './displace'
 import { BLOOM_PARAMS, applyBloom } from './bloom'
 import { GRAIN_PARAMS, applyGrain } from './grain'
@@ -44,6 +48,27 @@ export const EFFECTS: Record<EffectType, EffectDefinition> = {
     params: POSTERIZE_PARAMS,
     apply: applyPosterize,
   },
+  'gradient-map': {
+    type: 'gradient-map',
+    label: 'Gradient Map',
+    hint: 'Recolour by tone, smoothly — a palette without quantizing.',
+    params: GRADIENT_MAP_PARAMS,
+    apply: applyGradientMap,
+  },
+  contour: {
+    type: 'contour',
+    label: 'Contour',
+    hint: 'Iso-lines and edges — structure drawn rather than filtered.',
+    params: CONTOUR_PARAMS,
+    apply: applyContour,
+  },
+  focus: {
+    type: 'focus',
+    label: 'Blur / Sharpen',
+    hint: 'Soften or bite, through the layer masks.',
+    params: FOCUS_PARAMS,
+    apply: applyFocus,
+  },
   pixelate: {
     type: 'pixelate',
     label: 'Pixelate',
@@ -79,6 +104,13 @@ export const EFFECTS: Record<EffectType, EffectDefinition> = {
     params: PIXEL_SORT_PARAMS,
     apply: applyPixelSort,
   },
+  transform: {
+    type: 'transform',
+    label: 'Transform',
+    hint: 'Mirror, rotate, tile, and kaleidoscope the frame.',
+    params: TRANSFORM_PARAMS,
+    apply: applyTransform,
+  },
   displace: {
     type: 'displace',
     label: 'Displace',
@@ -112,11 +144,15 @@ export const EFFECTS: Record<EffectType, EffectDefinition> = {
 export const EFFECT_ORDER: Array<EffectType> = [
   'levels',
   'posterize',
+  'gradient-map',
   'pixelate',
   'dither',
   'halftone',
   'ascii',
   'pixel-sort',
+  'contour',
+  'focus',
+  'transform',
   'displace',
   'channel-drift',
   'bloom',

@@ -219,3 +219,68 @@ describe('randomizeField', () => {
     }
   })
 })
+
+describe('placement', () => {
+  const at = (buffer: ReturnType<typeof renderField>, x: number, y: number) =>
+    luma(buffer, (y * buffer.width + x) * 4)
+
+  it('is the identity at its defaults', () => {
+    const base = { ...FIELD_DEFAULTS(), field: 'fbm', grain: 0 }
+    const plain = renderField(base, { width: 48, height: 48, scale: 1 })
+    const placed = renderField(
+      { ...base, panX: 0, panY: 0, rotate: 0 },
+      { width: 48, height: 48, scale: 1 },
+    )
+    expect(Array.from(placed.data)).toEqual(Array.from(plain.data))
+  })
+
+  /** Panning by the frame width should bring genuinely different content in. */
+  it('pans the field', () => {
+    const base = { ...FIELD_DEFAULTS(), field: 'fbm', grain: 0, shapes: 0 }
+    const plain = renderField(base, { width: 48, height: 48, scale: 1 })
+    const panned = renderField(
+      { ...base, panX: 40 },
+      { width: 48, height: 48, scale: 1 },
+    )
+    expect(Array.from(panned.data)).not.toEqual(Array.from(plain.data))
+  })
+
+  /**
+   * Panning is authored in export pixels, so the same value must frame the
+   * same content at any render scale — the whole point of the param model.
+   */
+  it('pans by the same fraction at any render scale', () => {
+    const base = {
+      ...FIELD_DEFAULTS(),
+      field: 'gradient',
+      grain: 0,
+      shapes: 0,
+      panX: 40,
+    }
+    const full = renderField(base, { width: 64, height: 64, scale: 1 })
+    const half = renderField(base, { width: 32, height: 32, scale: 0.5 })
+    // The same relative position holds the same tone in both renders.
+    expect(at(half, 8, 8)).toBeCloseTo(at(full, 16, 16), 3)
+  })
+
+  it('rotates the ramp', () => {
+    const base = { ...FIELD_DEFAULTS(), field: 'gradient', grain: 0, shapes: 0 }
+    const plain = renderField(base, { width: 48, height: 48, scale: 1 })
+    const turned = renderField(
+      { ...base, rotate: 90 },
+      { width: 48, height: 48, scale: 1 },
+    )
+    expect(Array.from(turned.data)).not.toEqual(Array.from(plain.data))
+  })
+
+  it('moves the flow field too, rather than ignoring placement', () => {
+    const base = { ...FIELD_DEFAULTS(), field: 'flow', grain: 0, shapes: 0 }
+    const plain = renderField(base, { width: 40, height: 40, scale: 1 })
+    const panned = renderField(
+      { ...base, panX: 15 },
+      { width: 40, height: 40, scale: 1 },
+    )
+    expect(Array.from(panned.data)).not.toEqual(Array.from(plain.data))
+    expect(Array.from(panned.data).every(Number.isFinite)).toBe(true)
+  })
+})

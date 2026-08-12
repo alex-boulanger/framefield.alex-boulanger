@@ -17,13 +17,14 @@ import {
 } from '#/renderer/recipe'
 import { randomizeField } from '#/renderer/generators/field'
 import { randomSeed } from '#/renderer/rng'
-import { NO_MASK, isSourceLayer } from '#/renderer/types'
+import { NO_MASK, NO_SHAPE, isSourceLayer } from '#/renderer/types'
 import type {
   BlendMode,
   EffectType,
   Layer,
   ParamValue,
   Recipe,
+  ShapeMask,
   ToneMask,
 } from '#/renderer/types'
 
@@ -70,6 +71,13 @@ export interface LabState {
    */
   soloLayerId: string | null
   /**
+   * Hold the current colourway across a remix.
+   *
+   * UI state rather than part of the recipe, unlike a layer lock: it describes
+   * how the *next* reroll should behave, not anything about the artwork.
+   */
+  paletteLocked: boolean
+  /**
    * Object URLs for imported images, by asset handle.
    *
    * Deliberately outside the recipe *and* outside history. An image layer
@@ -102,6 +110,7 @@ export interface LabState {
   setLayerOpacity: (id: string, opacity: number) => void
   setLayerBlendMode: (id: string, mode: BlendMode) => void
   setLayerMask: (id: string, mask: Partial<ToneMask>) => void
+  setLayerShape: (id: string, shape: Partial<ShapeMask>) => void
   setLayerName: (id: string, name: string) => void
   resetLayer: (id: string) => void
   /** Reroll a generator layer's seed, keeping its parameters. */
@@ -111,6 +120,8 @@ export interface LabState {
 
   setComparing: (comparing: boolean) => void
   toggleSolo: (id: string | null) => void
+  toggleLayerLock: (id: string) => void
+  togglePaletteLock: () => void
 }
 
 const initialRecipe = createDefaultRecipe()
@@ -224,6 +235,7 @@ export const useLab = create<LabState>((set) => ({
   lastEdit: null,
   comparing: false,
   soloLayerId: null,
+  paletteLocked: false,
 
   setRecipe: (recipe) =>
     set((state) => ({
@@ -287,7 +299,9 @@ export const useLab = create<LabState>((set) => ({
 
   remix: () =>
     set((state) => {
-      const recipe = remixRecipe(state.recipe)
+      const recipe = remixRecipe(state.recipe, {
+        lockPalette: state.paletteLocked,
+      })
       return {
         ...pushHistory(state),
         recipe,
@@ -463,6 +477,24 @@ export const useLab = create<LabState>((set) => ({
       }),
     })),
 
+  setLayerShape: (id, shape) =>
+    set((state) => ({
+      ...pushHistory(state),
+      recipe: mapLayer(state.recipe, id, (layer) => {
+        const next = { ...layer.shape, ...shape }
+        // Same ordering guard the tone mask uses, so the two band handles can
+        // cross mid-drag without the layer blinking out.
+        return {
+          ...layer,
+          shape: {
+            ...next,
+            low: Math.min(next.low, next.high),
+            high: Math.max(next.low, next.high),
+          },
+        }
+      }),
+    })),
+
   setLayerName: (id, name) =>
     set((state) => ({
       ...pushHistory(state),
@@ -483,6 +515,7 @@ export const useLab = create<LabState>((set) => ({
         opacity: 1,
         blendMode: 'normal',
         mask: { ...NO_MASK },
+        shape: { ...NO_SHAPE },
         params: layerDefaults(layer),
       })),
     })),
@@ -515,6 +548,21 @@ export const useLab = create<LabState>((set) => ({
 
   toggleSolo: (id) =>
     set((state) => ({ soloLayerId: state.soloLayerId === id ? null : id })),
+
+  toggleLayerLock: (id) =>
+    set((state) => ({
+      ...pushHistory(state),
+      recipe: mapLayer(state.recipe, id, (layer) => ({
+        ...layer,
+        // Cleared to `undefined` rather than `false` so an unlocked layer
+        // serializes identically to one from before locks existed, and share
+        // URLs do not grow a `"locked":false` on every single layer.
+        locked: layer.locked ? undefined : true,
+      })),
+    })),
+
+  togglePaletteLock: () =>
+    set((state) => ({ paletteLocked: !state.paletteLocked })),
 }))
 
 /**

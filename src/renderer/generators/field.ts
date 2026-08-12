@@ -8,13 +8,16 @@ import {
 import type { PixelBuffer } from '../buffer'
 import {
   buildFlowField,
+  cellularFbm,
   fbm,
+  interference,
   lic,
   ridged,
   seedToInt,
   warped,
   whiteNoise,
 } from '../noise'
+import type { CellMode } from '../noise'
 import { hexToRgb } from '../palettes'
 import { createRng } from '../rng'
 import { defaultParams, list, num, roundParam, str } from '../params'
@@ -40,6 +43,9 @@ import type { Params, RenderEnv } from '../types'
  * preview/export fidelity the whole param model is built to preserve.
  */
 const FLOW_PLANE_SCALE = 0.5
+
+/** Cycles per unit of `scale` for the interference field. See its case below. */
+const MOIRE_CYCLES = 6
 
 /**
  * The source generator.
@@ -72,8 +78,39 @@ export const FIELD_PARAMS: Array<ParamSpec> = [
       { value: 'warp', label: 'Warp' },
       { value: 'ridged', label: 'Ridge' },
       { value: 'flow', label: 'Flow' },
+      { value: 'cellular', label: 'Cells' },
+      { value: 'moire', label: 'Moiré' },
       { value: 'gradient', label: 'Ramp' },
     ],
+  },
+  {
+    kind: 'select',
+    key: 'cellMode',
+    label: 'Cell type',
+    default: 'edge',
+    options: [
+      { value: 'f1', label: 'Stone' },
+      { value: 'edge', label: 'Cracks' },
+      { value: 'blocks', label: 'Plates' },
+    ],
+  },
+  {
+    kind: 'slider',
+    key: 'waves',
+    label: 'Waves',
+    min: 1,
+    max: 6,
+    step: 1,
+    default: 3,
+  },
+  {
+    kind: 'slider',
+    key: 'skew',
+    label: 'Beat',
+    min: 0,
+    max: 2,
+    step: 0.01,
+    default: 0.35,
   },
   {
     kind: 'slider',
@@ -187,6 +224,47 @@ export const FIELD_PARAMS: Array<ParamSpec> = [
     max: 1,
     step: 0.01,
     default: 0.06,
+  },
+  /*
+   * Placement. The field is infinite and the frame is a window onto it, so
+   * panning and rotating is how you *frame* a field rather than reroll until
+   * the seed happens to land somewhere good.
+   *
+   * Applied to the sample coordinate before anything reads it, so the noise,
+   * the shapes and the ramp all move together — the alternative is a pan that
+   * slides the texture out from under the composition.
+   */
+  {
+    kind: 'slider',
+    key: 'panX',
+    label: 'Pan X',
+    min: -2048,
+    max: 2048,
+    step: 1,
+    default: 0,
+    spatial: true,
+    unit: 'px',
+  },
+  {
+    kind: 'slider',
+    key: 'panY',
+    label: 'Pan Y',
+    min: -2048,
+    max: 2048,
+    step: 1,
+    default: 0,
+    spatial: true,
+    unit: 'px',
+  },
+  {
+    kind: 'slider',
+    key: 'rotate',
+    label: 'Rotate',
+    min: 0,
+    max: 360,
+    step: 1,
+    default: 0,
+    unit: '°',
   },
   {
     kind: 'palette',
@@ -380,6 +458,9 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
   const shapeCount = Math.round(num(params, 'shapes', 5))
   const shapeScale = num(params, 'shapeScale', 0.45)
   const composition = str(params, 'composition', 'orbit')
+  const cellMode = str(params, 'cellMode', 'edge') as CellMode
+  const waves = num(params, 'waves', 3)
+  const skew = num(params, 'skew', 0.35)
   const softness = num(params, 'softness', 0.3)
   const contrast = num(params, 'contrast', 0.15)
   const brightness = num(params, 'brightness', 0)
@@ -394,6 +475,17 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
   const short = Math.min(width, height)
   const aspect = width / short
   const fbmOptions = { octaves }
+
+  // Placement, in the same normalized units the field is sampled in. `env.scale`
+  // converts the export-space pan so a half-scale preview frames identically.
+  const panU = (num(params, 'panX', 0) * renderScale) / short
+  const panV = (num(params, 'panY', 0) * renderScale) / short
+  const spin = (num(params, 'rotate', 0) * Math.PI) / 180
+  const spinCos = Math.cos(spin)
+  const spinSin = Math.sin(spin)
+  const placed = panU !== 0 || panV !== 0 || spin !== 0
+  const centreU = aspect / 2
+  const centreV = 0.5
 
   const shapes: Array<Shape> = []
   for (let i = 0; i < shapeCount; i++) {
@@ -494,10 +586,24 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
       : null
 
   for (let py = 0; py < height; py++) {
-    const v = py / short
+    const rawV = py / short
 
     for (let px = 0; px < width; px++) {
-      const u = px / short
+      const rawU = px / short
+
+      // --- placement ----------------------------------------------------
+      let u = rawU
+      let v = rawV
+      if (placed) {
+        u -= panU
+        v -= panV
+        if (spin !== 0) {
+          const dx = u - centreU
+          const dy = v - centreV
+          u = centreU + dx * spinCos - dy * spinSin
+          v = centreV + dx * spinSin + dy * spinCos
+        }
+      }
 
       // --- base field -------------------------------------------------
       let tone: number
@@ -508,10 +614,44 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
         case 'ridged':
           tone = ridged(u * scale, v * scale, seed, fbmOptions) * 0.5 + 0.5
           break
-        case 'flow':
+        case 'flow': {
           // Precomputed above: LIC needs a blur and a measured stretch, both
-          // of which are whole-plane operations.
-          tone = flowPlane![py * width + px]
+          // of which are whole-plane operations. Placement therefore has to be
+          // a *lookup* into the finished plane rather than a change of sample
+          // coordinate — clamped, since the plane has no data outside itself.
+          const fx = Math.max(0, Math.min(width - 1, u * short))
+          const fy = Math.max(0, Math.min(height - 1, v * short))
+          const x0 = Math.floor(fx)
+          const y0 = Math.floor(fy)
+          const x1 = Math.min(width - 1, x0 + 1)
+          const y1 = Math.min(height - 1, y0 + 1)
+          const tx = fx - x0
+          const ty = fy - y0
+          const top =
+            flowPlane![y0 * width + x0] +
+            (flowPlane![y0 * width + x1] - flowPlane![y0 * width + x0]) * tx
+          const bottom =
+            flowPlane![y1 * width + x0] +
+            (flowPlane![y1 * width + x1] - flowPlane![y1 * width + x0]) * tx
+          tone = top + (bottom - top) * ty
+          break
+        }
+        case 'cellular':
+          tone = cellularFbm(u * scale, v * scale, seed, cellMode, fbmOptions)
+          break
+        case 'moire':
+          // `scale` counts *features across the frame* for every other field,
+          // and a grating needs an order of magnitude more of them to read as
+          // a grating at all: at the shared default it was one and a half
+          // stripes, which looks like blobs. The multiplier puts the usual
+          // slider range onto roughly 3-70 cycles, where the beating lives.
+          tone = interference(
+            u * scale * MOIRE_CYCLES,
+            v * scale * MOIRE_CYCLES,
+            seed,
+            waves,
+            skew,
+          )
           break
         case 'gradient':
           // A plain ramp is the honest baseline: pure tone, no texture.
@@ -577,23 +717,64 @@ export function renderField(params: Params, env: RenderEnv): PixelBuffer {
  */
 export function randomizeField(seed: string, palette: Array<string>): Params {
   const rng = createRng(`${seed}:params`)
-  const field = rng.pick(['fbm', 'warp', 'warp', 'ridged', 'flow'])
+  const field = rng.pick([
+    'fbm',
+    'warp',
+    'warp',
+    'ridged',
+    'flow',
+    'cellular',
+    'cellular',
+    'moire',
+  ])
 
   return {
     seed,
     field,
-    scale: roundParam(rng.range(1, field === 'flow' ? 4 : 6), 1),
+    /*
+     * Scale ranges are per-field on purpose. Cellular counts *cells across the
+     * frame*, so the fbm range would give either four boulders or gravel; and
+     * moiré is a frequency, where anything above a few cycles aliases into
+     * noise at preview scale and stops being a pattern at all.
+     */
+    scale: roundParam(
+      field === 'flow'
+        ? rng.range(1, 4)
+        : field === 'cellular'
+          ? rng.range(2, 7)
+          : field === 'moire'
+            ? rng.range(0.6, 2.4)
+            : rng.range(1, 6),
+      1,
+    ),
     octaves: rng.int(3, 7),
     warp: roundParam(rng.range(0.6, 2.6)),
     flow: rng.int(8, 26),
     shapes: rng.bool(0.6) ? rng.int(1, 12) : 0,
     shapeScale: roundParam(rng.range(0.2, 0.8)),
     composition: rng.pick(['scatter', 'orbit', 'stack', 'grid']),
+    cellMode: rng.pick(['f1', 'edge', 'edge', 'blocks']),
+    waves: rng.int(2, 5),
+    skew: roundParam(rng.range(0.1, 1.2)),
     softness: roundParam(rng.range(0.05, 0.7)),
     contrast: roundParam(rng.range(-0.1, 0.5)),
     brightness: roundParam(rng.range(-0.12, 0.12)),
     blur: rng.bool(0.25) ? rng.int(2, 20) : 0,
     grain: roundParam(rng.range(0, 0.18)),
+    /*
+     * Placement is a framing control, not a randomization axis, so remix leaves
+     * it alone. Panning a seamless field only shows a different part of it,
+     * which reseeding already does — while risking sliding the shapes
+     * off-frame. Rotation does read on the directional fields (ramp, flow), so
+     * it gets a small chance.
+     *
+     * Written out rather than omitted: `randomizeField` returns the whole param
+     * set, and a missing key round-trips through the sanitizer as its default,
+     * which would break the "every remix is shareable" equality check.
+     */
+    panX: 0,
+    panY: 0,
+    rotate: rng.bool(0.15) ? rng.int(0, 359) : 0,
     palette: [...palette],
   }
 }

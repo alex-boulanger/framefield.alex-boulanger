@@ -67,14 +67,14 @@ function applyContrast(value: number, amount: number): number {
   return (value - 0.5) * factor + 0.5
 }
 
-interface LinearStop {
+export interface LinearStop {
   r: number
   g: number
   b: number
 }
 
 /** Palette stops interpolated perceptually, stored linear. */
-function rampAt(stops: Array<LinearStop>, t: number): LinearStop {
+export function rampAt(stops: Array<LinearStop>, t: number): LinearStop {
   if (stops.length === 0) return { r: 0, g: 0, b: 0 }
   if (stops.length === 1) return stops[0]
 

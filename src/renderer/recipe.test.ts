@@ -190,6 +190,89 @@ describe('generated layer names', () => {
   })
 })
 
+describe('locks', () => {
+  function lockedStack() {
+    const base = createDefaultRecipe()
+    const layers = base.layers.map((layer, index) =>
+      index === 0 ? { ...layer, locked: true } : layer,
+    )
+    return { ...base, layers }
+  }
+
+  it('leaves a locked generator entirely alone across a remix', () => {
+    const before = lockedStack()
+    for (let i = 0; i < 25; i++) {
+      const after = remixRecipe(before)
+      expect(after.layers[0]).toEqual(before.layers[0])
+    }
+  })
+
+  it('still rerolls an unlocked generator', () => {
+    const before = createDefaultRecipe()
+    const after = remixRecipe(before)
+    expect(after.layers[0].params.seed).not.toBe(before.layers[0].params.seed)
+  })
+
+  /** The whole point of locking an effect: it survives the reroll. */
+  it('keeps a locked effect through randomize', () => {
+    const base = createDefaultRecipe()
+    const pinned = { ...base.layers[2], locked: true, name: 'Pinned' }
+    const after = randomizeFxStack({
+      ...base,
+      layers: [base.layers[0], base.layers[1], pinned],
+    })
+    expect(after.layers.find((layer) => layer.name === 'Pinned')).toEqual(
+      pinned,
+    )
+  })
+
+  it('drops unlocked effects as before', () => {
+    const base = createDefaultRecipe()
+    const after = randomizeFxStack(base)
+    expect(after.layers.filter((layer) => layer.kind === 'effect')).not.toEqual(
+      base.layers.filter((layer) => layer.kind === 'effect'),
+    )
+  })
+
+  it('holds the palette when asked', () => {
+    const before = createDefaultRecipe()
+    const palette = before.layers[0].params.palette
+    for (let i = 0; i < 10; i++) {
+      const after = remixRecipe(before, { lockPalette: true })
+      expect(after.layers[0].params.palette).toEqual(palette)
+    }
+  })
+
+  it('picks a new palette when not asked', () => {
+    const before = createDefaultRecipe()
+    const seen = new Set(
+      Array.from({ length: 25 }, () =>
+        JSON.stringify(remixRecipe(before).layers[0].params.palette),
+      ),
+    )
+    expect(seen.size).toBeGreaterThan(1)
+  })
+
+  /** A lock must not add noise to every layer of every share URL. */
+  it('serializes nothing for an unlocked layer', () => {
+    expect(JSON.stringify(createDefaultRecipe())).not.toContain('locked')
+  })
+
+  it('round-trips a lock through the sanitizer', () => {
+    const locked = lockedStack()
+    expect(decodeRecipe(encodeRecipe(locked))).toEqual(locked)
+  })
+
+  it('ignores a non-boolean lock from an untrusted recipe', () => {
+    const parsed = sanitizeRecipe({
+      version: 2,
+      canvas: { width: 100, height: 100 },
+      layers: [{ kind: 'effect', type: 'dither', locked: 'yes please' }],
+    })
+    expect(parsed?.layers[0].locked).toBeUndefined()
+  })
+})
+
 describe('encode/decode', () => {
   it('round-trips a recipe exactly', () => {
     const recipe = createDefaultRecipe()
