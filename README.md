@@ -115,7 +115,7 @@ association is configured in Cloudflare Pages, not in this repo.
 
 ## Tests
 
-`bun run test` — 370 tests, node only. No browser, no jsdom, no canvas mock: the
+`bun run test` — 419 tests, node only. No browser, no jsdom, no canvas mock: the
 renderer is pure functions over `Float32Array`, and `src/test/setup.ts` provides
 a small `ImageData` stand-in for the two conversion functions that need it.
 `renderRecipe` accepts a pre-rendered source, so even the full layer pipeline is
@@ -154,35 +154,91 @@ The scale-fidelity block in `renderRecipe.test.ts` pins the decision the param
 model rests on, and includes a sensitivity check that fails if scaling ever
 stops being applied.
 
+One earned its place by _not_ catching a bug:
+
+- **Pixel sort defaults to sorting downward.** The direction default moved from
+  `'0'` to `'90'`, and six tests that built their params from
+  `defaultParams(PIXEL_SORT_PARAMS)` and then asserted on rows kept asserting
+  against single-row buffers — where a vertical sort is a no-op. They did not
+  fail loudly at first; they became vacant. The lesson is that a test inheriting
+  a default is only testing whatever that default happens to be, so tests now
+  state the axis they need and one test pins the default itself. The spec
+  default and the runtime fallback are the same constant for the same reason —
+  they were two literals, and only one of them followed the change.
+
 ## Status
 
-Milestones 1–2 are done: generated source, recipe model, layer stack with
-reorder/toggle/duplicate/delete, posterize + dither + channel drift, image
-import, PNG export at size presets, and recipe URLs. The generator and the
-colour pipeline have since been rebuilt around continuous-tone fields in linear
-light.
+Milestones 1–2 are done, and the model has been rebuilt twice since: the
+generator and colour pipeline around continuous-tone fields in linear light, and
+the document around a unified layer stack where generators, imports, and effects
+are peers rather than a privileged source followed by effects
+(`.scratch/unified-layer-stack-v2/spec.md`).
 
-Generator cost, measured at preview (580×725) and export (1080×1350):
+Shipped: eleven effects — levels, posterize, pixelate, dither, halftone, ASCII,
+pixel sort, displace, channel drift, bloom, grain — plus per-layer opacity,
+blend modes and tone masks, drag-to-reorder, image import, curated presets and
+saved local presets rendered live, undo/redo, remix and randomize-FX, recipe
+URLs, PNG export at size presets, and the Web Worker render path.
 
-| field | preview | export |
-| ----- | ------- | ------ |
-| ramp  | 34ms    | 101ms  |
-| fBm   | 88ms    | 299ms  |
-| ridge | 88ms    | 314ms  |
-| warp  | 230ms   | 865ms  |
-| flow  | 494ms   | 1692ms |
+### Rendering
 
-The source is memoized, so these are paid on source edits and first paint, not
-on effect-slider drags (~40ms). Three optimizations got flow down from 6.2s /
-22s: baking the curl field onto a grid instead of evaluating four `fbm` per
-step, a gradient lookup table instead of `cos`/`sin` per lattice corner, and
-reduced octaves on the warp displacement lookups.
+Rendering happens in a worker. The preview climbs a ladder of four geometric
+resolutions rather than jumping to the final one, so a cold stack shows a blurry
+picture in tens of milliseconds instead of a blank canvas for seconds — about
+four percent more total work for a first frame roughly an order of magnitude
+sooner. Two budgets in `ui/previewScale.ts` set the ends of that ladder:
+`SYNC_PREVIEW_PIXEL_BUDGET` (420k) for the main-thread fallback and
+`WORKER_PREVIEW_PIXEL_BUDGET` (4M) for the worker.
 
-Dither cost at export (1080×1350): Bayer 55ms, blue 52ms, Floyd–Steinberg 83ms,
-Jarvis/Stucki ~115ms, Atkinson 127ms. The blue-noise mask takes 46ms to build,
-once per session.
+Two workers, for one reason: rendering is synchronous, so terminating a worker
+is the only way to abandon a pass the user has already invalidated. A persistent
+worker owns the cheap rungs and keeps its checkpoint cache warm through a drag;
+a disposable one takes the expensive rungs and is thrown away mid-render when
+the recipe changes.
 
-Not yet built: ASCII, remix preset strip, history, halftone, pixel sort, and the
-Web Worker render path. Rendering is currently synchronous — the preview is
-capped to a pixel budget (`PREVIEW_PIXEL_BUDGET` in `ui/CanvasViewport.tsx`) to
-keep slider drags responsive, and that cap is what the worker will lift.
+The checkpoint cache resumes from the deepest unchanged layer, so editing the
+top of a stack skips the generators _and_ the effects below it.
+
+### Cost
+
+Measured in node on an M-series laptop, warmed, single-threaded — the worker
+moves this work off the main thread but does not make it faster.
+
+Generator, by field:
+
+| field | preview 580×725 | export 1080×1350 |
+| ----- | --------------- | ---------------- |
+| ramp  | 51ms            | 170ms            |
+| fBm   | 117ms           | 310ms            |
+| ridge | 116ms           | 293ms            |
+| warp  | 212ms           | 766ms            |
+| flow  | 114ms           | 349ms            |
+
+Flow used to be by far the most expensive field at 494ms / 1692ms. Halving the
+LIC plane (`FLOW_PLANE_SCALE`) is an eightfold saving — a quarter of the pixels
+and half the steps across each — and it now costs about what fBm does. Three
+earlier optimizations had already brought it down from 6.2s / 22s: baking the
+curl field onto a grid instead of evaluating four `fbm` per step, a gradient
+lookup table instead of `cos`/`sin` per lattice corner, and reduced octaves on
+the warp displacement lookups.
+
+Whole presets, cold, at preview scale: Terminal 79ms, Engrave 103ms, Shred
+117ms, Silk 183ms, Newsprint 244ms, Low-res 258ms, Marble 304ms, Riso 317ms,
+Drip 366ms.
+
+Sources are memoized behind the checkpoint cache, so these are paid on source
+edits and first paint, not on effect-slider drags.
+
+> `bench.test.ts` at the repo root is **not** run by `bun run test` — the vitest
+> include is `src/**/*.test.ts` — and it does not measure what its labels claim:
+> `withLayers()` replaces the layer list wholesale, so its "source only" stacks
+> contain no generator, and its per-effect timings resume from a checkpoint that
+> already covers the whole stack. The numbers above were measured directly
+> against `renderField` and `renderRecipe`. Fix or delete it before trusting it.
+
+### Next
+
+`.scratch/post-mvp-depth/spec.md` records the reviewed plan: generator range
+(cellular and interference fields, symmetry), effect range (a Transform effect,
+gradient map, contour), and instrument UX (variation grid, locks, zoom, share
+link).

@@ -17,12 +17,23 @@ import { scaled } from '../types'
  * source produces a single span across the whole image and destroys it.
  */
 
+/**
+ * The default travel direction, named once.
+ *
+ * Both the spec default and the runtime fallback read it. They were written as
+ * two literals, and when the default moved from `'0'` to `'90'` only one of
+ * them followed — leaving `applyPixelSort` disagreeing with its own declared
+ * default whenever `rotation` was absent, and the tests silently sorting
+ * single-row buffers vertically, which is a no-op.
+ */
+const DEFAULT_ROTATION = '90'
+
 export const PIXEL_SORT_PARAMS: Array<ParamSpec> = [
   {
     kind: 'select',
     key: 'rotation',
     label: 'Direction',
-    default: '90',
+    default: DEFAULT_ROTATION,
     options: [
       { value: '0', label: '→' },
       { value: '90', label: '↓' },
@@ -115,7 +126,7 @@ export function applyPixelSort(
    * cannot express that — reversing the sort order swaps light for dark, which
    * is a different control.
    */
-  const rotation = str(params, 'rotation', '0')
+  const rotation = str(params, 'rotation', DEFAULT_ROTATION)
   const vertical = rotation === '90' || rotation === '270'
   const flipped = rotation === '180' || rotation === '270'
   const sortBy = str(params, 'sortBy', 'luma')

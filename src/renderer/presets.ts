@@ -1,6 +1,6 @@
 import { effectDefaults } from './effects'
 import { FIELD_DEFAULTS } from './generators/field'
-import { DEFAULT_BACKGROUND } from './recipe'
+import { DEFAULT_BACKGROUND, withGeneratedNames } from './recipe'
 import { NO_MASK } from './types'
 import type { EffectType, Layer, Params, Recipe, ToneMask } from './types'
 
@@ -317,6 +317,6 @@ export function recipeFromPreset(
     version: 2,
     canvas: { ...canvas },
     background: DEFAULT_BACKGROUND,
-    layers: [generator, ...effects],
+    layers: withGeneratedNames([generator, ...effects]),
   }
 }

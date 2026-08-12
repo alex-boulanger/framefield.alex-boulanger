@@ -19,6 +19,7 @@ import {
   Copy,
   Eye,
   EyeOff,
+  Focus,
   GripVertical,
   Image as ImageIcon,
   Pencil,
@@ -55,6 +56,8 @@ export function LayerStack() {
   const addGeneratorLayer = useLab((state) => state.addGeneratorLayer)
   const addImageLayer = useLab((state) => state.addImageLayer)
   const randomizeFxStack = useLab((state) => state.randomizeFxStack)
+  const soloLayerId = useLab((state) => state.soloLayerId)
+  const toggleSolo = useLab((state) => state.toggleSolo)
 
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -120,8 +123,10 @@ export function LayerStack() {
                   key={layer.id}
                   layer={layer}
                   selected={layer.id === selectedId}
+                  soloed={layer.id === soloLayerId}
                   onSelect={() => selectLayer(layer.id)}
                   onToggle={() => toggleLayer(layer.id)}
+                  onSolo={() => toggleSolo(layer.id)}
                   onDuplicate={() => duplicateLayer(layer.id)}
                   onRemove={() => removeLayer(layer.id)}
                   onRename={(name) => setLayerName(layer.id, name)}
@@ -227,16 +232,20 @@ export function LayerStack() {
 function StackRow({
   layer,
   selected,
+  soloed,
   onSelect,
   onToggle,
+  onSolo,
   onDuplicate,
   onRemove,
   onRename,
 }: {
   layer: Layer
   selected: boolean
+  soloed: boolean
   onSelect: () => void
   onToggle: () => void
+  onSolo: () => void
   onDuplicate: () => void
   onRemove: () => void
   onRename: (name: string) => void
@@ -253,6 +262,8 @@ function StackRow({
     isDragging,
   } = useSortable({ id: layer.id })
   const label = layer.name ?? layerTypeLabel(layer)
+  /** Whether the row's controls are on screen, which the subtitle defers to. */
+  const showActions = selected || editing || soloed
 
   const commitName = () => {
     onRename(draft)
@@ -262,7 +273,9 @@ function StackRow({
   return (
     <div
       ref={setNodeRef}
-      className="group flex items-center gap-1 border-t px-1 py-1 first:border-t-0"
+      // `items-start`, so the grip and the eye line up with the *name* rather
+      // than floating between the two lines.
+      className="group flex items-start gap-1 border-t px-1 py-1.5 first:border-t-0"
       style={{
         borderColor: 'var(--color-line)',
         background: selected ? 'var(--color-raised)' : 'transparent',
@@ -275,7 +288,7 @@ function StackRow({
       <button
         ref={setActivatorNodeRef}
         type="button"
-        className="flex h-6 w-4 shrink-0 cursor-grab items-center justify-center border-none bg-transparent active:cursor-grabbing"
+        className="flex h-5 w-4 shrink-0 cursor-grab items-center justify-center border-none bg-transparent active:cursor-grabbing"
         style={{ color: 'var(--color-faint)' }}
         title="Drag to reorder"
         aria-label={`Drag ${layerTypeLabel(layer)} layer`}
@@ -289,8 +302,8 @@ function StackRow({
         type="button"
         className="ff-btn ff-btn-icon shrink-0"
         style={{
-          height: 24,
-          width: 24,
+          height: 20,
+          width: 20,
           background: 'transparent',
           border: 'none',
         }}
@@ -305,79 +318,112 @@ function StackRow({
         )}
       </button>
 
-      {editing ? (
-        <input
-          className="ff-input h-6 min-w-0 flex-1"
-          value={draft}
-          autoFocus
-          maxLength={48}
-          aria-label="Layer name"
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commitName}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') event.currentTarget.blur()
-            if (event.key === 'Escape') {
-              setDraft(layer.name ?? '')
-              setEditing(false)
-            }
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={onSelect}
-          aria-pressed={selected}
-          className="flex min-w-0 flex-1 cursor-pointer items-baseline gap-2 bg-transparent px-1 text-left"
-        >
-          {/* `flex-1 min-w-0`: the name is the row's identity, so it claims the
-              leftover width and the annotations give way. Without it the name
-              is the item that shrinks — a named layer at partial opacity in a
-              256px panel rendered at literally zero width. */}
-          <span
-            className="min-w-0 flex-1 truncate font-mono text-[11px] tracking-wide"
+      {/*
+        Two lines, and the row height is the same whether the actions are
+        showing or not.
+
+        One line could not hold grip, eye, name, annotations and four actions
+        in a 256px panel — the name was the item flexbox crushed, down to two
+        characters once solo added a fourth action. Giving the name a line to
+        itself is what makes the stack readable; reserving the second line for
+        the annotations means the actions fade in over space that is already
+        allocated, so hovering never shifts the layout.
+      */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {editing ? (
+          <input
+            className="ff-input h-6 min-w-0 w-full"
+            value={draft}
+            autoFocus
+            maxLength={48}
+            aria-label="Layer name"
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commitName}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur()
+              if (event.key === 'Escape') {
+                setDraft(layer.name ?? '')
+                setEditing(false)
+              }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={onSelect}
+            aria-pressed={selected}
+            className="block w-full min-w-0 cursor-pointer truncate bg-transparent px-1 text-left font-mono text-[11px] leading-5 tracking-wide"
             title={label}
             style={{
               color: layer.enabled ? 'var(--color-ink)' : 'var(--color-faint)',
             }}
           >
             {label}
-          </span>
-          {/* No type chip here. The row keeps a persistent ~72px of actions, so
-              in a 256px panel the name, the type, and the opacity badge cannot
-              all fit — and the name is the one flexbox crushed, to literally
-              zero width. The type is on the row's label and in the inspector;
-              the name is the only thing this row alone can tell you. */}
-          {layer.opacity < 1 && (
-            <span className="ff-value shrink-0" style={{ fontSize: 10 }}>
-              {Math.round(layer.opacity * 100)}%
-            </span>
-          )}
-        </button>
-      )}
-
-      {/* Row actions stay hidden until hover or selection so the stack reads as
-          a list rather than a toolbar grid. */}
-      <div
-        className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
-        style={{ opacity: selected || editing ? 1 : undefined }}
-      >
-        {!editing && (
-          <StackAction
-            title="Rename"
-            onClick={() => {
-              setDraft(layer.name ?? '')
-              setEditing(true)
-            }}
-          >
-            <Pencil size={12} />
-          </StackAction>
+          </button>
         )}
-        <StackAction title="Duplicate" onClick={onDuplicate}>
-          <Copy size={12} />
-        </StackAction>
-        <StackAction title="Delete" onClick={onRemove}>
-          <Trash2 size={12} />
-        </StackAction>
+
+        <div className="relative flex h-4 min-w-0 items-center justify-between gap-2 px-1">
+          {/*
+            The subtitle: what the layer *is*, under whatever it is called.
+
+            It yields while the actions are showing, and that is not cosmetic —
+            at the 200px minimum panel width the four action buttons leave
+            about twenty pixels, and flexbox spends them by crushing this to
+            literally zero. Rather than render a subtitle nobody can read, it
+            steps aside for the controls and comes back when they go.
+
+            `invisible` rather than `hidden`, so the line keeps its width and
+            hovering a row never reflows the text in it.
+          */}
+          <span
+            className={`ff-label min-w-0 truncate ${
+              showActions ? 'invisible' : 'group-hover:invisible'
+            }`}
+            style={{ fontSize: 9 }}
+          >
+            {[
+              layerTypeLabel(layer),
+              layer.opacity < 1 ? `${Math.round(layer.opacity * 100)}%` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </span>
+
+          {/* Actions stay hidden until hover or selection so the stack reads as
+              a list rather than a toolbar grid. */}
+          <div
+            className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100"
+            // A soloed row keeps its actions visible whether or not it is
+            // selected: solo changes what the whole viewport shows, so the
+            // control that turns it off must never be hidden behind a hover.
+            style={{ opacity: showActions ? 1 : undefined }}
+          >
+            <StackAction
+              title={soloed ? 'Leave solo' : 'Solo this layer'}
+              onClick={onSolo}
+              active={soloed}
+            >
+              <Focus size={12} />
+            </StackAction>
+            {!editing && (
+              <StackAction
+                title="Rename"
+                onClick={() => {
+                  setDraft(layer.name ?? '')
+                  setEditing(true)
+                }}
+              >
+                <Pencil size={12} />
+              </StackAction>
+            )}
+            <StackAction title="Duplicate" onClick={onDuplicate}>
+              <Copy size={12} />
+            </StackAction>
+            <StackAction title="Delete" onClick={onRemove}>
+              <Trash2 size={12} />
+            </StackAction>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -386,10 +432,12 @@ function StackRow({
 function StackAction({
   title,
   onClick,
+  active,
   children,
 }: {
   title: string
   onClick: () => void
+  active?: boolean
   children: React.ReactNode
 }) {
   return (
@@ -397,9 +445,12 @@ function StackAction({
       type="button"
       title={title}
       aria-label={title}
+      aria-pressed={active}
       onClick={onClick}
       className="flex h-6 w-6 cursor-pointer items-center justify-center border-none bg-transparent"
-      style={{ color: 'var(--color-faint)' }}
+      style={{
+        color: active ? 'var(--color-signal)' : 'var(--color-faint)',
+      }}
     >
       {children}
     </button>

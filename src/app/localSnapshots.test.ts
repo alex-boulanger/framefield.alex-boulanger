@@ -59,6 +59,36 @@ describe('local snapshots', () => {
     ])
   })
 
+  it('reports failure instead of losing the save quietly', () => {
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: {
+        ...new MemoryStorage(),
+        setItem() {
+          throw new DOMException('quota', 'QuotaExceededError')
+        },
+      },
+      configurable: true,
+    })
+
+    const snapshot = createLocalSnapshot(createDefaultRecipe(), 'Doomed')
+    expect(saveLocalSnapshots([snapshot])).toBeNull()
+  })
+
+  it('reports the truncated list when over the cap', () => {
+    const recipe = createDefaultRecipe()
+    const many = Array.from({ length: 60 }, (_, index) =>
+      createLocalSnapshot(recipe, `Preset ${index}`),
+    )
+
+    const stored = saveLocalSnapshots(many)
+
+    // The caller has to be able to see that eleven were dropped, otherwise it
+    // keeps rendering presets that are not on disk.
+    expect(stored).toHaveLength(48)
+    expect(loadLocalSnapshots()).toHaveLength(48)
+    expect(stored?.[0].name).toBe('Preset 0')
+  })
+
   it('drops snapshots with invalid recipes', () => {
     localStorage.setItem(
       'framefield.localSnapshots.v1',

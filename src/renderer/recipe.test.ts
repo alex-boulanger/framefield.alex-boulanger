@@ -1,17 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import {
+  createBlankRecipe,
   createDefaultRecipe,
   createEffectLayer,
   createImageLayer,
+  createRandomRecipe,
   decodeRecipe,
+  decodeRecipeAny,
   IMPORTED_ASSET,
   encodeRecipe,
+  encodeRecipeCompressed,
   randomizeFxStack,
   remixRecipe,
+  baseLayerName,
   sanitizeRecipe,
   SIZE_PRESETS,
+  uniqueLayerName,
+  withGeneratedNames,
 } from './recipe'
 import { EFFECT_ORDER } from './effects'
+import { renderRecipe } from './renderRecipe'
+import { PRESETS, recipeFromPreset } from './presets'
 
 describe('createDefaultRecipe', () => {
   it('opens with a non-empty stack so first paint is interesting', () => {
@@ -28,6 +37,156 @@ describe('createDefaultRecipe', () => {
       createEffectLayer('dither'),
     ].map((l) => l.id)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('opening documents', () => {
+  /**
+   * The default is built at module scope and prerendered into the static HTML,
+   * so it must be identical every time it is constructed. A random seed here
+   * is a hydration mismatch, and the seed is visible in the inspector.
+   */
+  it('builds the default document deterministically', () => {
+    const a = createDefaultRecipe()
+    const b = createDefaultRecipe()
+    expect(a.layers.map((layer) => layer.params)).toEqual(
+      b.layers.map((layer) => layer.params),
+    )
+    expect(a.layers[0].params.seed).toBe(b.layers[0].params.seed)
+  })
+
+  it('opens a blank document with nothing in it', () => {
+    const blank = createBlankRecipe({ width: 1200, height: 630 })
+    expect(blank.layers).toEqual([])
+    // A new piece is not a reason to forget the format already chosen.
+    expect(blank.canvas).toEqual({ width: 1200, height: 630 })
+  })
+
+  it('renders a blank document as the bare background', () => {
+    const blank = createBlankRecipe({ width: 8, height: 8 })
+    expect(() => renderRecipe({ recipe: blank, scale: 1 })).not.toThrow()
+  })
+
+  it('survives its own sanitizer, so a blank document is shareable', () => {
+    const blank = createBlankRecipe()
+    expect(decodeRecipe(encodeRecipe(blank))).toEqual(blank)
+  })
+
+  it('gives a different random artwork each time', () => {
+    const seeds = new Set(
+      Array.from({ length: 20 }, () => {
+        const recipe = createRandomRecipe()
+        return String(recipe.layers[0].params.seed)
+      }),
+    )
+    expect(seeds.size).toBeGreaterThan(15)
+  })
+
+  /**
+   * Opening on a random artwork is only an improvement if every one of them is
+   * worth looking at — this is the same bar Remix is held to, since it is the
+   * same code path.
+   */
+  it('always opens on a usable stack', () => {
+    for (let i = 0; i < 100; i++) {
+      const recipe = createRandomRecipe()
+      expect(recipe.layers.length).toBeGreaterThan(1)
+      expect(recipe.layers[0].kind).toBe('generator')
+      expect(decodeRecipe(encodeRecipe(recipe))).toEqual(recipe)
+    }
+  })
+
+  it('keeps the canvas it is given', () => {
+    const size = { width: 1920, height: 1080 }
+    expect(createRandomRecipe(size).canvas).toEqual(size)
+  })
+})
+
+describe('generated layer names', () => {
+  it('names every layer it is given', () => {
+    const named = withGeneratedNames([
+      createEffectLayer('dither'),
+      createEffectLayer('posterize'),
+    ])
+    expect(named.map((layer) => layer.name)).toEqual(['Dither', 'Posterize'])
+  })
+
+  /** Three dithers in a stack must not be three identical rows. */
+  it('numbers repeats of the same type', () => {
+    const named = withGeneratedNames([
+      createEffectLayer('dither'),
+      createEffectLayer('dither'),
+      createEffectLayer('dither'),
+    ])
+    expect(named.map((layer) => layer.name)).toEqual([
+      'Dither',
+      'Dither 2',
+      'Dither 3',
+    ])
+  })
+
+  /** It runs over recipes that may already carry the user's own labels. */
+  it('leaves existing names alone', () => {
+    const custom = { ...createEffectLayer('dither'), name: 'Ink pass' }
+    const named = withGeneratedNames([custom, createEffectLayer('dither')])
+    expect(named.map((layer) => layer.name)).toEqual(['Ink pass', 'Dither'])
+    expect(named[0]).toBe(custom)
+  })
+
+  it('does not collide with a name the user already used', () => {
+    const named = withGeneratedNames([
+      { ...createEffectLayer('posterize'), name: 'Dither' },
+      createEffectLayer('dither'),
+    ])
+    expect(named.map((layer) => layer.name)).toEqual(['Dither', 'Dither 2'])
+  })
+
+  it('gives every layer in a fresh document a distinct name', () => {
+    for (const recipe of [createDefaultRecipe(), createRandomRecipe()]) {
+      const names = recipe.layers.map((layer) => layer.name)
+      expect(names.every(Boolean)).toBe(true)
+      expect(new Set(names).size).toBe(names.length)
+    }
+  })
+
+  it('names preset layers too', () => {
+    const recipe = recipeFromPreset(PRESETS[0], { width: 100, height: 100 })
+    expect(recipe.layers.every((layer) => Boolean(layer.name))).toBe(true)
+  })
+
+  describe('uniqueLayerName', () => {
+    it('returns the base when it is free', () => {
+      expect(uniqueLayerName('Dither', [])).toBe('Dither')
+    })
+
+    it('skips over gaps rather than reusing a taken suffix', () => {
+      expect(uniqueLayerName('Dither', ['Dither', 'Dither 2'])).toBe('Dither 3')
+    })
+  })
+
+  describe('baseLayerName', () => {
+    /** Duplicating a duplicate must count up, not nest into "Dither 2 2 2". */
+    it('strips a trailing counter', () => {
+      expect(baseLayerName('Dither 2')).toBe('Dither')
+      expect(baseLayerName('Dither 2 2')).toBe('Dither 2')
+    })
+
+    it('leaves a name without one alone', () => {
+      expect(baseLayerName('Dither')).toBe('Dither')
+      expect(baseLayerName('Ink pass')).toBe('Ink pass')
+    })
+
+    it('counts up across repeated duplication', () => {
+      const taken = ['Dither']
+      for (const expected of ['Dither 2', 'Dither 3', 'Dither 4']) {
+        const next = uniqueLayerName(
+          baseLayerName(taken[taken.length - 1]),
+          taken,
+        )
+        expect(next).toBe(expected)
+        taken.push(next)
+      }
+    })
   })
 })
 
@@ -50,6 +209,80 @@ describe('encode/decode', () => {
       expect(() => decodeRecipe(junk)).not.toThrow()
       expect(decodeRecipe(junk)).toBeNull()
     }
+  })
+})
+
+describe('compressed encoding', () => {
+  /**
+   * A stack deep enough that compression is worth doing, using *distinct*
+   * effects. Twelve copies of one layer would compress ~90% and prove nothing
+   * about a real document; a stack of different effects is the honest case.
+   */
+  function deepRecipe() {
+    const base = createDefaultRecipe()
+    const layers = [
+      base.layers[0],
+      ...EFFECT_ORDER.map((type) => createEffectLayer(type)),
+    ]
+    return { ...base, layers }
+  }
+
+  it('round-trips through the compressed form', async () => {
+    const recipe = deepRecipe()
+    const encoded = await encodeRecipeCompressed(recipe)
+    expect(await decodeRecipeAny(encoded)).toEqual(recipe)
+  })
+
+  /**
+   * The whole point. Past roughly 2KB, links start being truncated by
+   * messaging apps and unfurlers, and a 13-layer stack blows through that
+   * uncompressed.
+   */
+  it('is substantially shorter than the plain encoding on a deep stack', () => {
+    const recipe = deepRecipe()
+    return encodeRecipeCompressed(recipe).then((packed) => {
+      expect(packed.length).toBeLessThan(encodeRecipe(recipe).length / 2)
+    })
+  })
+
+  it('stays URL-safe', async () => {
+    const encoded = await encodeRecipeCompressed(deepRecipe())
+    expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/)
+  })
+
+  /**
+   * Links already exist in the wild and are the only copy of what they encode.
+   * The decoder must keep reading them forever.
+   */
+  it('still decodes uncompressed links', async () => {
+    const recipe = createDefaultRecipe()
+    const legacy = encodeRecipe(recipe)
+    expect(legacy.startsWith('eyJ2')).toBe(true)
+    expect(await decodeRecipeAny(legacy)).toEqual(recipe)
+  })
+
+  it('returns null for garbage rather than throwing', async () => {
+    for (const junk of ['z', 'z###', 'zYWJj', 'not-base64!!']) {
+      await expect(decodeRecipeAny(junk)).resolves.toBeNull()
+    }
+  })
+
+  /**
+   * A mangled link must not be able to replace a good document with nothing.
+   * Compression makes this sharper: a truncated deflate stream can inflate into
+   * something that still parses as JSON but has lost fields.
+   */
+  it('rejects a v2 payload with no layers array instead of emptying the stack', () => {
+    expect(
+      sanitizeRecipe({ version: 2, canvas: { width: 100, height: 100 } }),
+    ).toBeNull()
+    expect(sanitizeRecipe({ version: 2, layers: 'nope' })).toBeNull()
+  })
+
+  it('still honours a deliberately empty stack', () => {
+    const emptied = sanitizeRecipe({ version: 2, layers: [] })
+    expect(emptied).not.toBeNull()
+    expect(emptied?.layers).toEqual([])
   })
 })
 

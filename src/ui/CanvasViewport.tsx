@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useLab } from '#/app/store'
+import { useLab, viewRecipe } from '#/app/store'
 import {
   commonPrefix,
   putBuffer,
@@ -106,8 +106,23 @@ type WorkerMessage =
   | { kind: 'error'; id: number; error: string }
 
 export function CanvasViewport() {
-  const recipe = useLab((state) => state.recipe)
+  const document_ = useLab((state) => state.recipe)
   const assets = useLab((state) => state.assets)
+  const comparing = useLab((state) => state.comparing)
+  const soloLayerId = useLab((state) => state.soloLayerId)
+
+  /**
+   * What the viewport draws, which is not always the document.
+   *
+   * Everything downstream — the render effect, the worker inputs, the
+   * checkpoint keys — reads this rather than the recipe, so compare and solo
+   * cost nothing extra: they invalidate the stack exactly like any other edit
+   * and reuse the same cache machinery.
+   */
+  const recipe = useMemo(
+    () => viewRecipe(document_, { comparing, soloLayerId }),
+    [document_, comparing, soloLayerId],
+  )
 
   const [boxRef, box] = useElementSize<HTMLDivElement>()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -428,9 +443,24 @@ export function CanvasViewport() {
         className="flex shrink-0 items-center justify-between gap-4 border-t px-4 py-2"
         style={{ borderColor: 'var(--color-line)' }}
       >
-        <span className="ff-value">
-          {recipe.canvas.width} × {recipe.canvas.height}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="ff-value">
+            {recipe.canvas.width} × {recipe.canvas.height}
+          </span>
+          {/* The viewport is not showing the document. Say so plainly —
+              otherwise a left-on solo reads as a broken stack. */}
+          {(comparing || soloLayerId !== null) && (
+            <span
+              className="ff-label px-1.5 py-0.5"
+              style={{
+                color: 'var(--color-void)',
+                background: 'var(--color-signal)',
+              }}
+            >
+              {comparing ? 'SOURCE' : 'SOLO'}
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-4">
           <span className="ff-value">
             {Math.round((paintedScale || interactiveScale) * 100)}% preview

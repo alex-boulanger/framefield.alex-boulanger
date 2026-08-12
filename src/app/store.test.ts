@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { useLab } from './store'
+import { useLab, viewRecipe } from './store'
 import { createDefaultRecipe } from '#/renderer/recipe'
+import type { Recipe } from '#/renderer/types'
 
 function samePalette(a: unknown, b: unknown) {
   return (
@@ -44,16 +45,71 @@ describe('useLab history', () => {
     expect(useLab.getState().future.length).toBe(0)
   })
 
+  /**
+   * The bug this pins: a range input fires per `input` event, so a drag used to
+   * push one history entry per tick and evict the whole 80-entry history.
+   */
+  it('collapses a drag on one param into a single history entry', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+    const id = base.layers[0].id
+    const before = useLab.getState().recipe.layers[0].params.scale
+
+    for (let step = 1; step <= 100; step++) {
+      useLab.getState().setLayerParam(id, 'scale', step / 10)
+    }
+
+    expect(useLab.getState().recipe.layers[0].params.scale).toBe(10)
+    expect(useLab.getState().past.length).toBe(1)
+
+    // One undo returns to before the drag, not to the previous hundredth.
+    useLab.getState().undo()
+    expect(useLab.getState().recipe.layers[0].params.scale).toBe(before)
+  })
+
+  it('opens a new entry for a different param', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+    const id = base.layers[0].id
+
+    useLab.getState().setLayerParam(id, 'scale', 5)
+    useLab.getState().setLayerParam(id, 'octaves', 3)
+    expect(useLab.getState().past.length).toBe(2)
+
+    useLab.getState().undo()
+    expect(useLab.getState().recipe.layers[0].params.octaves).not.toBe(3)
+    expect(useLab.getState().recipe.layers[0].params.scale).toBe(5)
+  })
+
+  it('ends the run when another action intervenes', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+    const id = base.layers[0].id
+
+    useLab.getState().setLayerParam(id, 'scale', 5)
+    // Anything else closes the entry, so resuming the same slider afterwards
+    // is a separate undo step rather than a continuation.
+    useLab.getState().setCanvasSize(1200, 630)
+    useLab.getState().setLayerParam(id, 'scale', 6)
+
+    expect(useLab.getState().past.length).toBe(3)
+  })
+
   it('undoes layer renames', () => {
     const base = createDefaultRecipe()
     useLab.getState().hydrateRecipe(base)
     const id = base.layers[0].id
 
+    // Layers are born with a generated name, so undo restores that rather
+    // than clearing the field.
+    const generated = base.layers[0].name
+    expect(generated).toBe('Field')
+
     useLab.getState().setLayerName(id, 'Ink pass')
     expect(useLab.getState().recipe.layers[0].name).toBe('Ink pass')
 
     useLab.getState().undo()
-    expect(useLab.getState().recipe.layers[0].name).toBeUndefined()
+    expect(useLab.getState().recipe.layers[0].name).toBe(generated)
   })
 })
 
@@ -132,6 +188,117 @@ describe('generator palette changes', () => {
       .getState()
       .recipe.layers.find((entry) => entry.id === second)
     expect(layer?.params.palette).toEqual(own)
+  })
+})
+
+describe('newArtwork', () => {
+  it('clears the stack but keeps the canvas', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+    useLab.getState().setCanvasSize(1200, 630)
+
+    useLab.getState().newArtwork()
+
+    expect(useLab.getState().recipe.layers).toEqual([])
+    expect(useLab.getState().recipe.canvas).toEqual({
+      width: 1200,
+      height: 630,
+    })
+    expect(useLab.getState().selectedLayerId).toBeNull()
+  })
+
+  /** Why it needs no confirmation dialog: it is one undo away. */
+  it('is undoable', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+
+    useLab.getState().newArtwork()
+    expect(useLab.getState().recipe.layers).toEqual([])
+
+    useLab.getState().undo()
+    expect(useLab.getState().recipe.layers).toEqual(base.layers)
+  })
+})
+
+describe('viewRecipe', () => {
+  const view = (recipe: Recipe, comparing: boolean, soloLayerId: string | null) =>
+    viewRecipe(recipe, { comparing, soloLayerId })
+
+  it('is the document itself when nothing is active', () => {
+    const recipe = createDefaultRecipe()
+    expect(view(recipe, false, null)).toBe(recipe)
+  })
+
+  it('drops every effect while comparing', () => {
+    const recipe = createDefaultRecipe()
+    const compared = view(recipe, true, null)
+    expect(compared.layers.every((layer) => layer.kind !== 'effect')).toBe(true)
+    expect(compared.layers.length).toBe(1)
+  })
+
+  /**
+   * An effect with no input is a black frame, which answers nothing. Soloing
+   * one keeps the sources so the user sees what that pass actually does.
+   */
+  it('keeps the sources when soloing an effect', () => {
+    const recipe = createDefaultRecipe()
+    const effect = recipe.layers.find((layer) => layer.kind === 'effect')!
+    const soloed = view(recipe, false, effect.id)
+
+    expect(soloed.layers.map((layer) => layer.id)).toEqual([
+      recipe.layers[0].id,
+      effect.id,
+    ])
+  })
+
+  it('shows a soloed source entirely alone', () => {
+    const recipe = createDefaultRecipe()
+    const generator = recipe.layers[0]
+    expect(view(recipe, false, generator.id).layers).toEqual([generator])
+  })
+
+  it('lets compare win over solo', () => {
+    const recipe = createDefaultRecipe()
+    const effect = recipe.layers.find((layer) => layer.kind === 'effect')!
+    expect(view(recipe, true, effect.id).layers).toEqual([recipe.layers[0]])
+  })
+
+  it('ignores a solo id that is no longer in the stack', () => {
+    const recipe = createDefaultRecipe()
+    expect(view(recipe, false, 'deleted_layer')).toBe(recipe)
+  })
+
+  /** View state must never reach the document, history, or the share URL. */
+  it('never mutates the recipe it is given', () => {
+    const recipe = createDefaultRecipe()
+    const before = JSON.stringify(recipe)
+    view(recipe, true, recipe.layers[0].id)
+    view(recipe, false, recipe.layers[1].id)
+    expect(JSON.stringify(recipe)).toBe(before)
+  })
+})
+
+describe('solo and compare state', () => {
+  it('toggles solo off when the same layer is soloed twice', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+    const id = base.layers[0].id
+
+    useLab.getState().toggleSolo(id)
+    expect(useLab.getState().soloLayerId).toBe(id)
+    useLab.getState().toggleSolo(id)
+    expect(useLab.getState().soloLayerId).toBeNull()
+  })
+
+  it('keeps view state out of history', () => {
+    const base = createDefaultRecipe()
+    useLab.getState().hydrateRecipe(base)
+
+    useLab.getState().toggleSolo(base.layers[0].id)
+    useLab.getState().setComparing(true)
+
+    expect(useLab.getState().past).toEqual([])
+    expect(useLab.getState().recipe).toBe(base)
   })
 })
 

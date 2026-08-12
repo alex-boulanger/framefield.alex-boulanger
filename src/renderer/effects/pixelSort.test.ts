@@ -7,6 +7,18 @@ import { env, gradient, meanLuminance, pixel, solid } from '#/test/helpers'
 
 const base = () => defaultParams(PIXEL_SORT_PARAMS)
 
+/**
+ * Params for the tests that reason about rows.
+ *
+ * The default direction is `'90'` — down — so a single-row buffer sorts lines
+ * of length one and nothing moves. Tests that assert on rows must therefore say
+ * `'0'` out loud rather than inherit it: these six passed for exactly as long
+ * as the default happened to be horizontal, and became vacant no-ops the moment
+ * it changed. `defaults sort downward` below is what now pins the default
+ * itself, so this helper is free to state the axis it needs.
+ */
+const horizontal = () => ({ ...base(), rotation: '0' })
+
 /** Row of pseudo-random greys — unsorted by construction. */
 function noiseRow(width: number, height = 1): PixelBuffer {
   const buffer = createBuffer(width, height)
@@ -44,16 +56,36 @@ describe('applyPixelSort', () => {
     const buffer = noiseRow(64)
     applyPixelSort(
       buffer,
-      { ...base(), low: 0, high: 1, maxRun: 600 },
+      { ...horizontal(), low: 0, high: 1, maxRun: 600 },
       env(buffer),
     )
     expect(isAscending(buffer, 0, 0, 64)).toBe(true)
   })
 
+  /**
+   * Pins the declared default, which is the thing that actually drifted. The
+   * effect sorts downward out of the box, so a column of noise ends up
+   * ascending from the top.
+   */
+  it('defaults to sorting downward', () => {
+    const buffer = noiseRow(1, 64)
+    applyPixelSort(
+      buffer,
+      { ...base(), low: 0, high: 1, maxRun: 600 },
+      env(buffer),
+    )
+
+    for (let y = 1; y < 64; y++) {
+      expect(luma(buffer, y * 4)).toBeGreaterThanOrEqual(
+        luma(buffer, (y - 1) * 4) - 1e-6,
+      )
+    }
+  })
+
   it('is a permutation — it moves pixels, never invents them', () => {
     const before = noiseRow(64)
     const original = Array.from(before.data).sort()
-    applyPixelSort(before, { ...base(), low: 0, high: 1 }, env(before))
+    applyPixelSort(before, { ...horizontal(), low: 0, high: 1 }, env(before))
     expect(Array.from(before.data).sort()).toEqual(original)
   })
 
@@ -61,24 +93,28 @@ describe('applyPixelSort', () => {
     // Everything here is far brighter than the band, so nothing may move.
     const buffer = solid(32, 4, 0.95, 0.95, 0.95)
     const untouched = Array.from(buffer.data)
-    applyPixelSort(buffer, { ...base(), low: 0, high: 0.2 }, env(buffer))
+    applyPixelSort(buffer, { ...horizontal(), low: 0, high: 0.2 }, env(buffer))
     expect(Array.from(buffer.data)).toEqual(untouched)
   })
 
   it('preserves mean brightness', () => {
     const buffer = noiseRow(64, 8)
     const before = meanLuminance(buffer)
-    applyPixelSort(buffer, { ...base(), low: 0, high: 1 }, env(buffer))
+    applyPixelSort(buffer, { ...horizontal(), low: 0, high: 1 }, env(buffer))
     expect(meanLuminance(buffer)).toBeCloseTo(before, 6)
   })
 
   it('reverses when asked', () => {
     const ascending = noiseRow(64)
     const descending = noiseRow(64)
-    applyPixelSort(ascending, { ...base(), low: 0, high: 1 }, env(ascending))
+    applyPixelSort(
+      ascending,
+      { ...horizontal(), low: 0, high: 1 },
+      env(ascending),
+    )
     applyPixelSort(
       descending,
-      { ...base(), low: 0, high: 1, reverse: true },
+      { ...horizontal(), low: 0, high: 1, reverse: true },
       env(descending),
     )
 
@@ -96,7 +132,7 @@ describe('applyPixelSort', () => {
     const buffer = noiseRow(64)
     applyPixelSort(
       buffer,
-      { ...base(), low: 0, high: 1, maxRun: 16 },
+      { ...horizontal(), low: 0, high: 1, maxRun: 16 },
       env(buffer),
     )
     expect(isAscending(buffer, 0, 0, 16)).toBe(true)
@@ -108,12 +144,12 @@ describe('applyPixelSort', () => {
     const half = noiseRow(64)
     applyPixelSort(
       full,
-      { ...base(), low: 0, high: 1, maxRun: 32 },
+      { ...horizontal(), low: 0, high: 1, maxRun: 32 },
       env(full, 1),
     )
     applyPixelSort(
       half,
-      { ...base(), low: 0, high: 1, maxRun: 32 },
+      { ...horizontal(), low: 0, high: 1, maxRun: 32 },
       env(half, 0.5),
     )
     expect(Array.from(full.data)).not.toEqual(Array.from(half.data))
@@ -122,7 +158,7 @@ describe('applyPixelSort', () => {
   it('sorts columns when rotated', () => {
     const rows = noiseRow(32, 32)
     const cols = noiseRow(32, 32)
-    applyPixelSort(rows, { ...base(), low: 0, high: 1 }, env(rows))
+    applyPixelSort(rows, { ...horizontal(), low: 0, high: 1 }, env(rows))
     applyPixelSort(
       cols,
       { ...base(), low: 0, high: 1, rotation: '90' },
@@ -209,7 +245,7 @@ describe('applyPixelSort', () => {
       }
       applyPixelSort(
         buffer,
-        { ...base(), low: 0, high: 1, sortBy },
+        { ...horizontal(), low: 0, high: 1, sortBy },
         env(buffer),
       )
       return Array.from(buffer.data).join(',')
@@ -220,8 +256,16 @@ describe('applyPixelSort', () => {
   it('swaps low and high if given backwards', () => {
     const straight = noiseRow(48)
     const swapped = noiseRow(48)
-    applyPixelSort(straight, { ...base(), low: 0.2, high: 0.8 }, env(straight))
-    applyPixelSort(swapped, { ...base(), low: 0.8, high: 0.2 }, env(swapped))
+    applyPixelSort(
+      straight,
+      { ...horizontal(), low: 0.2, high: 0.8 },
+      env(straight),
+    )
+    applyPixelSort(
+      swapped,
+      { ...horizontal(), low: 0.8, high: 0.2 },
+      env(swapped),
+    )
     expect(Array.from(swapped.data)).toEqual(Array.from(straight.data))
   })
 

@@ -11,6 +11,7 @@ import { roundParam, sanitizeParams } from './params'
 import { BLEND_MODES, NO_MASK, isSourceLayer } from './types'
 import type {
   BlendMode,
+  CanvasSize,
   EffectLayer,
   EffectType,
   GeneratorLayer,
@@ -84,6 +85,67 @@ export function createImageLayer(asset: string, name: string): ImageLayer {
   }
 }
 
+/* -------------------------------------------------------------------------
+ * Layer names
+ * ---------------------------------------------------------------------- */
+
+/** What the layer *is*, ignoring any name the user gave it. */
+export function layerTypeLabel(layer: Layer): string {
+  if (layer.kind === 'effect') return EFFECTS[layer.type].label
+  if (layer.kind === 'image') return 'Image'
+  return 'Field'
+}
+
+/**
+ * A name with any trailing counter removed: `Dither 2` → `Dither`.
+ *
+ * Duplicating a duplicate has to count up, not nest. Without this,
+ * `Dither` → `Dither 2` → `Dither 2 2` → `Dither 2 2 2`, which is how a
+ * three-deep stack ends up unreadable.
+ */
+export function baseLayerName(name: string): string {
+  return name.replace(/ \d+$/, '')
+}
+
+/**
+ * `base`, or `base 2`, `base 3`… until it is not already taken.
+ *
+ * Terminates because `taken` is finite: some suffix is always free.
+ */
+export function uniqueLayerName(base: string, taken: Iterable<string>): string {
+  const used = new Set(taken)
+  if (!used.has(base)) return base
+
+  let n = 2
+  while (used.has(`${base} ${n}`)) n++
+  return `${base} ${n}`
+}
+
+/**
+ * Give every unnamed layer a unique, type-derived name.
+ *
+ * Every layer carries a name from the moment it exists, which does two things.
+ * Three dithers in a stack stop being three identical rows. And because the
+ * stack row prints the *type* underneath the name, a layer that always has a
+ * name always has something in that second line — which is what turns it from
+ * blank reserved space into the row's subtitle.
+ *
+ * Layers that already have a name are left exactly as they are: this runs over
+ * recipes that may contain the user's own labels.
+ */
+export function withGeneratedNames(layers: Array<Layer>): Array<Layer> {
+  const taken = new Set(
+    layers.flatMap((layer) => (layer.name ? [layer.name] : [])),
+  )
+
+  return layers.map((layer) => {
+    if (layer.name) return layer
+    const name = uniqueLayerName(layerTypeLabel(layer), taken)
+    taken.add(name)
+    return { ...layer, name }
+  })
+}
+
 /** Fresh defaults for a layer, without disturbing what it renders. */
 export function layerDefaults(layer: Layer): Layer['params'] {
   if (layer.kind === 'effect') return effectDefaults(layer.type)
@@ -114,22 +176,69 @@ export function sanitizeMask(input: unknown): ToneMask {
   }
 }
 
+export const DEFAULT_CANVAS: CanvasSize = { width: 1080, height: 1350 }
+
 /**
- * The first thing anyone sees. The quality bar says first load must show an
- * interesting image with no input, so the default recipe is a real composition
- * rather than a bare generator.
+ * The seed the default document opens with.
+ *
+ * Fixed, not random, because this recipe is built at module scope and the app
+ * is prerendered — a random seed here renders one value into the static HTML
+ * and a different one on the client, which is a hydration mismatch. The seed is
+ * visible in the inspector, so the mismatch is real and not theoretical.
+ *
+ * Randomness on open is applied after mount instead (`useRecipeUrl`), where it
+ * cannot disagree with the prerendered markup.
+ */
+const DEFAULT_SEED = 'framefield'
+
+/**
+ * The document the app is built around before anything has opened.
+ *
+ * A real composition rather than a bare generator: the quality bar says first
+ * load must show an interesting image with no input, and this is what the
+ * static HTML is prerendered from.
  */
 export function createDefaultRecipe(): Recipe {
   return {
     version: 2,
-    canvas: { width: 1080, height: 1350 },
+    canvas: { ...DEFAULT_CANVAS },
     background: DEFAULT_BACKGROUND,
-    layers: [
-      createGeneratorLayer(),
+    layers: withGeneratedNames([
+      createGeneratorLayer(DEFAULT_SEED),
       { ...createEffectLayer('posterize'), opacity: 1 },
       { ...createEffectLayer('dither'), opacity: 0.9 },
-    ],
+    ]),
   }
+}
+
+/**
+ * An empty document — the ground and nothing on it.
+ *
+ * Genuinely empty rather than "one bare generator": the stack panel has a
+ * first-class empty state and an Add layer button right beneath it, so a blank
+ * canvas is a place to start composing rather than a broken-looking one. The
+ * canvas size carries over, because starting a new piece is not a reason to
+ * forget the format the user chose.
+ */
+export function createBlankRecipe(canvas: CanvasSize = DEFAULT_CANVAS): Recipe {
+  return {
+    version: 2,
+    canvas: { ...canvas },
+    background: DEFAULT_BACKGROUND,
+    layers: [],
+  }
+}
+
+/**
+ * A fresh random artwork, for opening the app on something worth looking at.
+ *
+ * Deliberately the same path the Remix button takes, so the two cannot drift
+ * into producing different qualities of result — the conservative ranges in
+ * `randomizeField` and `randomizeFxStack` are what keep both usable rather than
+ * merely different.
+ */
+export function createRandomRecipe(canvas: CanvasSize = DEFAULT_CANVAS): Recipe {
+  return remixRecipe({ ...createDefaultRecipe(), canvas: { ...canvas } })
 }
 
 export const DEFAULT_BACKGROUND = '#000000'
@@ -255,7 +364,13 @@ export function randomizeFxStack(current: Recipe): Recipe {
   // Source layers are the composition; only the treatment is rerolled. Their
   // order is preserved and the new effects go on top, which is where a stack
   // built by hand would have put them.
-  return { ...current, layers: [...current.layers.filter(isSourceLayer), ...layers] }
+  return {
+    ...current,
+    layers: withGeneratedNames([
+      ...current.layers.filter(isSourceLayer),
+      ...layers,
+    ]),
+  }
 }
 
 /**
@@ -303,6 +418,26 @@ export function sanitizeRecipe(input: unknown): Recipe | null {
   const canvas = (raw.canvas ?? {}) as Record<string, unknown>
   const width = typeof canvas.width === 'number' ? canvas.width : 1080
   const height = typeof canvas.height === 'number' ? canvas.height : 1350
+
+  /**
+   * A missing `layers` array is a malformed payload, not an empty document.
+   *
+   * The distinction matters because the two are indistinguishable downstream
+   * and have opposite consequences. `JSON.stringify` always emits the array, so
+   * anything without one did not come from this app intact — and coercing it to
+   * `[]` used to hand back a *valid, empty* recipe, which `hydrateRecipe`
+   * would then use to replace the user's stack with nothing.
+   *
+   * That path got sharper when share links became compressed: a truncated
+   * base64 payload of plain JSON simply fails to parse, but a truncated
+   * deflate stream can inflate into something that parses and is missing
+   * fields. Rejecting here means a mangled link opens the default document
+   * instead of silently wiping the work already on screen.
+   *
+   * An explicitly empty `layers: []` is still honoured — deleting every layer
+   * is a legitimate thing to have done.
+   */
+  if (raw.version === 2 && !Array.isArray(raw.layers)) return null
 
   const rawLayers = Array.isArray(raw.layers) ? raw.layers : []
   const layers = rawLayers.flatMap((entry) => {
@@ -419,24 +554,94 @@ function sanitizeLayer(input: unknown): Layer | null {
   }
 }
 
-/**
- * URL encoding. Base64url of the JSON — no compression yet; recipes are small
- * and keeping it readable in devtools is worth more than a few hundred bytes.
- */
-export function encodeRecipe(recipe: Recipe): string {
-  const json = JSON.stringify(recipe)
-  const bytes = new TextEncoder().encode(json)
+/* -------------------------------------------------------------------------
+ * URL encoding
+ * ---------------------------------------------------------------------- */
+
+function toBase64Url(bytes: Uint8Array): string {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+function fromBase64Url(encoded: string): Uint8Array {
+  const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/')
+  return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+}
+
+/**
+ * Marker for a deflated payload.
+ *
+ * Safe as a discriminator because an uncompressed payload is base64url of JSON
+ * that always begins `{"version"`, so it always begins `eyJ2` — no plain recipe
+ * can start with `z`. Old links therefore keep decoding untouched, which
+ * matters because they are already out in the world and are the only copy of
+ * whatever they encode.
+ */
+const DEFLATE_PREFIX = 'z'
+
+/** Base64url of the raw JSON. Synchronous, and the fallback encoding. */
+export function encodeRecipe(recipe: Recipe): string {
+  return toBase64Url(new TextEncoder().encode(JSON.stringify(recipe)))
+}
+
 export function decodeRecipe(encoded: string): Recipe | null {
   try {
-    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/')
-    const binary = atob(base64)
-    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+    const bytes = fromBase64Url(encoded)
     return sanitizeRecipe(JSON.parse(new TextDecoder().decode(bytes)))
+  } catch {
+    return null
+  }
+}
+
+async function pump(
+  bytes: Uint8Array,
+  // Not `TransformStream<Uint8Array, Uint8Array>`: these streams accept any
+  // `BufferSource` on the writable side, so the narrower type does not fit.
+  stream: CompressionStream | DecompressionStream,
+): Promise<Uint8Array> {
+  const blob = new Blob([bytes as BlobPart])
+  const piped = blob.stream().pipeThrough(stream)
+  return new Uint8Array(await new Response(piped).arrayBuffer())
+}
+
+/**
+ * The encoding actually written to the URL: deflated, then base64url.
+ *
+ * Recipes are far from small once a stack is deep — measured at 1.5 KB for the
+ * default three layers and 6.5 KB at fourteen, and past about 2 KB links start
+ * being truncated by messaging apps and link unfurlers. Deflate cuts that
+ * roughly fourfold on JSON this repetitive.
+ *
+ * Async because `CompressionStream` is, which is why `encodeRecipe` stays as
+ * the synchronous fallback rather than being replaced: environments without
+ * `CompressionStream` still produce a working link, just a longer one.
+ */
+export async function encodeRecipeCompressed(recipe: Recipe): Promise<string> {
+  const plain = encodeRecipe(recipe)
+  if (typeof CompressionStream === 'undefined') return plain
+
+  try {
+    const bytes = new TextEncoder().encode(JSON.stringify(recipe))
+    const deflated = await pump(bytes, new CompressionStream('deflate-raw'))
+    const packed = DEFLATE_PREFIX + toBase64Url(deflated)
+    // Deflate has overhead, and a tiny recipe can come out longer. Keep
+    // whichever is actually shorter — the decoder reads both.
+    return packed.length < plain.length ? packed : plain
+  } catch {
+    return plain
+  }
+}
+
+/** Decode either encoding. Accepts every link ever produced by this app. */
+export async function decodeRecipeAny(encoded: string): Promise<Recipe | null> {
+  if (!encoded.startsWith(DEFLATE_PREFIX)) return decodeRecipe(encoded)
+  if (typeof DecompressionStream === 'undefined') return null
+
+  try {
+    const bytes = fromBase64Url(encoded.slice(DEFLATE_PREFIX.length))
+    const raw = await pump(bytes, new DecompressionStream('deflate-raw'))
+    return sanitizeRecipe(JSON.parse(new TextDecoder().decode(raw)))
   } catch {
     return null
   }

@@ -1,18 +1,23 @@
 import { create } from 'zustand'
 import {
+  createBlankRecipe,
   createDefaultRecipe,
   createEffectLayer,
   createGeneratorLayer,
   createImageLayer,
+  baseLayerName,
   createLayerId,
   layerDefaults,
+  layerTypeLabel,
+  uniqueLayerName,
+  withGeneratedNames,
   remixRecipe,
   randomizeFxStack,
   SIZE_PRESETS,
 } from '#/renderer/recipe'
 import { randomizeField } from '#/renderer/generators/field'
 import { randomSeed } from '#/renderer/rng'
-import { NO_MASK } from '#/renderer/types'
+import { NO_MASK, isSourceLayer } from '#/renderer/types'
 import type {
   BlendMode,
   EffectType,
@@ -31,11 +36,39 @@ import type {
  * meant to prevent.
  */
 
+/**
+ * The param edit the last history entry was opened for.
+ *
+ * Only `setLayerParam` writes it, and every other action clears it, so a run of
+ * edits is only ever collapsed while nothing else has happened in between.
+ */
+interface EditMark {
+  id: string
+  key: string
+  at: number
+}
+
 export interface LabState {
   recipe: Recipe
   past: Array<Recipe>
   future: Array<Recipe>
   selectedLayerId: string | null
+  /** Internal history bookkeeping — see `COALESCE_MS`. */
+  lastEdit: EditMark | null
+
+  /**
+   * Bypass the effect stack and show the sources alone.
+   *
+   * View state, not document state: it never enters the recipe, the URL, or
+   * history, because "what am I looking at right now" is not part of the
+   * artwork. Held rather than toggled, so it cannot be left on by accident.
+   */
+  comparing: boolean
+  /**
+   * Render one layer's contribution alone. See `soloedRecipe` for what that
+   * means for each layer kind. Also view state, for the same reason.
+   */
+  soloLayerId: string | null
   /**
    * Object URLs for imported images, by asset handle.
    *
@@ -54,6 +87,8 @@ export interface LabState {
 
   randomizeFxStack: () => void
   remix: () => void
+  /** Clear the stack and start over, keeping the chosen canvas size. */
+  newArtwork: () => void
 
   addEffectLayer: (type: EffectType) => void
   addGeneratorLayer: () => void
@@ -73,15 +108,38 @@ export interface LabState {
   reseedLayer: (id: string) => void
   /** Reroll a generator layer's parameters, keeping the stack's palette. */
   randomizeLayer: (id: string) => void
+
+  setComparing: (comparing: boolean) => void
+  toggleSolo: (id: string | null) => void
 }
 
 const initialRecipe = createDefaultRecipe()
 const HISTORY_LIMIT = 80
 
-function pushHistory(state: LabState): Pick<LabState, 'past' | 'future'> {
+/**
+ * How long a run of edits to one param stays open as a single history entry.
+ *
+ * A range input fires on every `input` event, so dragging one 0..1 slider at
+ * `step: 0.01` emits up to a hundred `setLayerParam` calls. Committing each one
+ * made undo step back a hundredth of a slider at a time and — because the
+ * history is capped at 80 — let a single drag evict every entry before it. The
+ * state the user actually wanted to return to was the first casualty.
+ *
+ * A time window rather than a pointer-up commit: it lives entirely in the store,
+ * so it covers keyboard-driven slider changes and any future control that emits
+ * continuously, instead of having to be reimplemented in each one.
+ */
+const COALESCE_MS = 500
+
+function pushHistory(
+  state: LabState,
+): Pick<LabState, 'past' | 'future' | 'lastEdit'> {
   return {
     past: [...state.past, state.recipe].slice(-HISTORY_LIMIT),
     future: [],
+    // Any action that opens a history entry also ends the open edit run, so a
+    // drag followed by anything else is a clean boundary.
+    lastEdit: null,
   }
 }
 
@@ -128,11 +186,17 @@ function syncInheritedLayerPalettes(
   )
 }
 
-/** Add to the top of the stack and select it, whatever the layer renders. */
+/**
+ * Add to the top of the stack and select it, whatever the layer renders.
+ *
+ * The new layer is named here rather than in `create*Layer`, because a unique
+ * name needs to know what is already in the stack — and only the store does.
+ */
 function appendLayer(state: LabState, layer: Layer) {
+  const layers = withGeneratedNames([...state.recipe.layers, layer])
   return {
     ...pushHistory(state),
-    recipe: { ...state.recipe, layers: [...state.recipe.layers, layer] },
+    recipe: { ...state.recipe, layers },
     selectedLayerId: layer.id,
   }
 }
@@ -157,6 +221,9 @@ export const useLab = create<LabState>((set) => ({
   future: [],
   selectedLayerId: initialRecipe.layers[0]?.id ?? null,
   assets: {},
+  lastEdit: null,
+  comparing: false,
+  soloLayerId: null,
 
   setRecipe: (recipe) =>
     set((state) => ({
@@ -170,6 +237,7 @@ export const useLab = create<LabState>((set) => ({
       recipe,
       past: [],
       future: [],
+      lastEdit: null,
       selectedLayerId: selectedLayer(recipe, state.selectedLayerId),
     })),
 
@@ -187,6 +255,9 @@ export const useLab = create<LabState>((set) => ({
         recipe: previous,
         past: state.past.slice(0, -1),
         future: [state.recipe, ...state.future].slice(0, HISTORY_LIMIT),
+        // Without this, undoing mid-drag and then resuming the same slider
+        // would fold the resumed edits into the entry undo just stepped off.
+        lastEdit: null,
         selectedLayerId: selectedLayer(previous, state.selectedLayerId),
       }
     }),
@@ -199,6 +270,7 @@ export const useLab = create<LabState>((set) => ({
         recipe: next,
         past: [...state.past, state.recipe].slice(-HISTORY_LIMIT),
         future: state.future.slice(1),
+        lastEdit: null,
         selectedLayerId: selectedLayer(next, state.selectedLayerId),
       }
     }),
@@ -221,6 +293,17 @@ export const useLab = create<LabState>((set) => ({
         recipe,
         selectedLayerId: recipe.layers[0]?.id ?? null,
       }
+    }),
+
+  /**
+   * Goes through history rather than `hydrateRecipe`, so clearing the stack is
+   * one undo away. That is the whole reason this is safe to put next to Remix
+   * without a confirmation dialog.
+   */
+  newArtwork: () =>
+    set((state) => {
+      const recipe = createBlankRecipe(state.recipe.canvas)
+      return { ...pushHistory(state), recipe, selectedLayerId: null }
     }),
 
   addEffectLayer: (type) => set((state) => appendLayer(state, createEffectLayer(type))),
@@ -258,6 +341,16 @@ export const useLab = create<LabState>((set) => ({
       const copy: Layer = {
         ...source,
         id: createLayerId(),
+        // Numbered off the *source* name, not the type, so duplicating
+        // "Ink pass" gives "Ink pass 2" rather than "Dither 4" — and off its
+        // base, so duplicating "Dither 2" gives "Dither 3" rather than
+        // "Dither 2 2".
+        name: uniqueLayerName(
+          baseLayerName(source.name ?? layerTypeLabel(source)),
+          state.recipe.layers.flatMap((entry) =>
+            entry.name ? [entry.name] : [],
+          ),
+        ),
         params: { ...source.params },
       }
       const layers = [...state.recipe.layers]
@@ -278,7 +371,7 @@ export const useLab = create<LabState>((set) => ({
       })),
     })),
 
-  selectLayer: (id) => set({ selectedLayerId: id }),
+  selectLayer: (id) => set({ selectedLayerId: id, lastEdit: null }),
 
   moveLayerTo: (id, targetIndex) =>
     set((state) => {
@@ -300,8 +393,29 @@ export const useLab = create<LabState>((set) => ({
         params: { ...layer.params, [key]: value },
       }))
 
+      /**
+       * Continue the open entry rather than opening a new one when this is the
+       * same param still being dragged. `past` is left exactly as it was, so
+       * the entry pushed by the first tick of the drag is the one undo returns
+       * to — the state from before the drag started.
+       */
+      const now = Date.now()
+      const continues =
+        state.lastEdit !== null &&
+        state.lastEdit.id === id &&
+        state.lastEdit.key === key &&
+        now - state.lastEdit.at < COALESCE_MS
+
+      const history = continues
+        ? { past: state.past, future: state.future }
+        : {
+            past: [...state.past, state.recipe].slice(-HISTORY_LIMIT),
+            future: [],
+          }
+
       return {
-        ...pushHistory(state),
+        ...history,
+        lastEdit: { id, key, at: now },
         recipe:
           key === 'palette' && edited?.kind === 'generator'
             ? {
@@ -396,6 +510,54 @@ export const useLab = create<LabState>((set) => ({
         return { ...layer, params: randomizeField(randomSeed(), palette) }
       }),
     })),
+
+  setComparing: (comparing) => set({ comparing }),
+
+  toggleSolo: (id) =>
+    set((state) => ({ soloLayerId: state.soloLayerId === id ? null : id })),
 }))
+
+/**
+ * The recipe as the viewport should currently draw it.
+ *
+ * Compare and solo are *views*, so they are applied here rather than by
+ * mutating the document — which keeps them out of history and out of the share
+ * URL, and means the export always renders the real stack no matter what the
+ * screen is showing.
+ *
+ * Solo means different things by kind, because "this layer alone" is only
+ * meaningful for something that makes its own pixels:
+ *
+ * - a **source** layer soloes to itself, with nothing above or beside it;
+ * - an **effect** layer soloes to every source plus that one effect, since an
+ *   effect with no input is a black frame and answers no question the user was
+ *   asking.
+ *
+ * Compare wins over solo when both are active: it is held, so it reads as a
+ * momentary "show me the untouched picture" over whatever else is set.
+ */
+export function viewRecipe(
+  recipe: Recipe,
+  { comparing, soloLayerId }: Pick<LabState, 'comparing' | 'soloLayerId'>,
+): Recipe {
+  if (comparing) {
+    return { ...recipe, layers: recipe.layers.filter(isSourceLayer) }
+  }
+
+  if (soloLayerId === null) return recipe
+  const soloed = recipe.layers.find((layer) => layer.id === soloLayerId)
+  if (!soloed) return recipe
+
+  if (isSourceLayer(soloed)) {
+    return { ...recipe, layers: [soloed] }
+  }
+
+  return {
+    ...recipe,
+    layers: recipe.layers.filter(
+      (layer) => isSourceLayer(layer) || layer.id === soloLayerId,
+    ),
+  }
+}
 
 export const DEFAULT_SIZE = SIZE_PRESETS[1]

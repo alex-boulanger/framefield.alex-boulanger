@@ -165,14 +165,28 @@ export function PresetStrip() {
   const setRecipe = useLab((state) => state.setRecipe)
   const [snapshots, setSnapshots] = useState<Array<LocalSnapshot>>([])
   const [nameDraft, setNameDraft] = useState('')
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     setSnapshots(loadLocalSnapshots())
   }, [])
 
+  /**
+   * Adopt what was stored, not what was asked for.
+   *
+   * On failure the list is left alone deliberately: showing a preset that is
+   * not on disk is worse than not appearing to save, because the user finds out
+   * on reload with the recipe long gone.
+   */
   const persistSnapshots = (next: Array<LocalSnapshot>) => {
-    setSnapshots(next)
-    saveLocalSnapshots(next)
+    const stored = saveLocalSnapshots(next)
+    if (!stored) {
+      setError('Could not save — browser storage is full or unavailable')
+      return false
+    }
+    setSnapshots(stored)
+    setError(null)
+    return true
   }
 
   const apply = (preset: Preset) => {
@@ -185,8 +199,7 @@ export function PresetStrip() {
       recipe,
       nameDraft || `Preset ${snapshots.length + 1}`,
     )
-    persistSnapshots([snapshot, ...snapshots])
-    setNameDraft('')
+    if (persistSnapshots([snapshot, ...snapshots])) setNameDraft('')
   }
 
   return (
@@ -218,6 +231,15 @@ export function PresetStrip() {
             <BookmarkPlus size={13} />
           </button>
         </div>
+        {error && (
+          <span
+            className="ff-value leading-relaxed"
+            role="status"
+            style={{ fontSize: 10, color: 'var(--color-signal)' }}
+          >
+            {error}
+          </span>
+        )}
         {snapshots.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
             {snapshots.map((snapshot) => (

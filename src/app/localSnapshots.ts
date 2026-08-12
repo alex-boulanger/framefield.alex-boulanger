@@ -57,17 +57,31 @@ export function loadLocalSnapshots(): Array<LocalSnapshot> {
   }
 }
 
-export function saveLocalSnapshots(snapshots: Array<LocalSnapshot>): void {
+/**
+ * Persist the list, and report back what is *actually* stored.
+ *
+ * Returns the persisted list, or `null` if nothing could be written.
+ *
+ * Both halves of that signature exist because the previous `void` version let
+ * the UI tell two lies. Storage can be full or disabled, and the exception was
+ * swallowed — so a save that never happened still cleared the name field and
+ * rendered the new preset from React state, until a reload took it away. And
+ * the list is capped at `MAX_SNAPSHOTS`, so a caller holding 49 in state kept
+ * showing one that was never written. Returning the stored list makes the
+ * caller's state answerable to what survived rather than to what it asked for.
+ */
+export function saveLocalSnapshots(
+  snapshots: Array<LocalSnapshot>,
+): Array<LocalSnapshot> | null {
   const store = storage()
-  if (!store) return
+  if (!store) return null
+
+  const kept = snapshots.slice(0, MAX_SNAPSHOTS)
   try {
-    store.setItem(
-      STORAGE_KEY,
-      JSON.stringify(snapshots.slice(0, MAX_SNAPSHOTS)),
-    )
+    store.setItem(STORAGE_KEY, JSON.stringify(kept))
+    return kept
   } catch {
-    // Local storage can be disabled or full. Saving is best-effort; the recipe
-    // itself remains active in the editor either way.
+    return null
   }
 }
 

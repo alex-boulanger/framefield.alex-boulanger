@@ -19,12 +19,13 @@ export function layerSpecs(layer: Layer): Array<ParamSpec> {
   return FIELD_PARAMS
 }
 
-/** What the layer *is*, ignoring any name the user gave it. */
-export function layerTypeLabel(layer: Layer): string {
-  if (layer.kind === 'effect') return EFFECTS[layer.type].label
-  if (layer.kind === 'image') return 'Image'
-  return 'Field'
-}
+/**
+ * What the layer *is*, ignoring any name the user gave it.
+ *
+ * Defined in the renderer rather than here because generated layer names are
+ * built from it, and two copies of "what is this layer called" would drift.
+ */
+export { layerTypeLabel } from '#/renderer/recipe'
 
 export function layerHint(layer: Layer): string {
   if (layer.kind === 'effect') return EFFECTS[layer.type].hint

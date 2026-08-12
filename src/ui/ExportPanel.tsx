@@ -3,6 +3,12 @@ import { useLab } from '#/app/store'
 import { SIZE_PRESETS } from '#/renderer/recipe'
 import { renderToPngBlob } from '#/renderer/renderRecipe'
 import { Segmented } from './controls'
+import {
+  SHORTCUTS,
+  isTypingTarget,
+  matches,
+  useShortcutHint,
+} from './shortcuts'
 import { Download, Loader2 } from 'lucide-react'
 import type { Recipe } from '#/renderer/types'
 
@@ -80,6 +86,7 @@ function downloadBlob(blob: Blob, recipe: Recipe) {
  * user tuned at 40% is what lands in the PNG.
  */
 export function ExportPanel() {
+  const hint = useShortcutHint()
   const recipe = useLab((state) => state.recipe)
   const assets = useLab((state) => state.assets)
   const setCanvasSize = useLab((state) => state.setCanvasSize)
@@ -132,6 +139,25 @@ export function ExportPanel() {
       setBusy(false)
     }
   }
+
+  /**
+   * The export shortcut lives here rather than in `Lab`'s listener so the
+   * handler sits with the state it guards on — `busy` stops a second render
+   * being kicked off while the first is still going. No dependency array: the
+   * listener is re-registered each render so it always closes over the current
+   * `busy` and recipe, and add/remove of one listener is far cheaper than the
+   * render that just happened.
+   */
+  useEffect(() => {
+    const down = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) return
+      if (!matches(event, SHORTCUTS.exportPng)) return
+      event.preventDefault()
+      if (!busy) void exportPng()
+    }
+    window.addEventListener('keydown', down)
+    return () => window.removeEventListener('keydown', down)
+  })
 
   return (
     <div className="flex flex-col gap-3">
@@ -208,6 +234,7 @@ export function ExportPanel() {
         className="ff-btn ff-btn-accent"
         onClick={exportPng}
         disabled={busy}
+        title={`Export PNG (${hint(SHORTCUTS.exportPng)})`}
       >
         {busy ? (
           <Loader2 size={13} className="animate-spin" />
