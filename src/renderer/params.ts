@@ -1,3 +1,4 @@
+import { FONTS } from './fonts'
 import type { Params, ParamValue } from './types'
 
 /**
@@ -9,6 +10,15 @@ import type { Params, ParamValue } from './types'
 interface BaseSpec {
   key: string
   label: string
+  /**
+   * Section this param belongs to in the inspector.
+   *
+   * An effect has six or eight params and reads fine as a flat list. A text
+   * layer has forty, and a flat list of forty is a wall the user scrolls past
+   * rather than a panel they work in. Ungrouped params stay at the top, which
+   * is what keeps every existing spec list rendering exactly as before.
+   */
+  group?: string
 }
 
 export interface SliderSpec extends BaseSpec {
@@ -53,10 +63,35 @@ export interface TextSpec extends BaseSpec {
   default: string
   placeholder?: string
   maxLength?: number
+  multiline?: boolean
+}
+
+export interface ColorSpec extends BaseSpec {
+  kind: 'color'
+  default: string
+}
+
+/**
+ * A bundled typeface, by id.
+ *
+ * Its own kind rather than a `select` because the only useful preview of a
+ * typeface is the typeface: the picker draws each name in its own face, which
+ * a generic option list has no way to know it should do.
+ */
+export interface FontSpec extends BaseSpec {
+  kind: 'font'
+  default: string
 }
 
 export type ParamSpec =
-  SliderSpec | ToggleSpec | SelectSpec | PaletteSpec | SeedSpec | TextSpec
+  | SliderSpec
+  | ToggleSpec
+  | SelectSpec
+  | PaletteSpec
+  | SeedSpec
+  | TextSpec
+  | ColorSpec
+  | FontSpec
 
 /**
  * Round a generated param to a stable, serializable value.
@@ -160,6 +195,21 @@ export function sanitizeParams(
         params[spec.key] =
           typeof value === 'string' && value.length > 0
             ? value.slice(0, spec.maxLength ?? 256)
+            : spec.default
+        break
+      case 'color':
+        params[spec.key] =
+          typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value)
+            ? value
+            : spec.default
+        break
+      case 'font':
+        // A recipe naming a face this build does not carry falls back rather
+        // than rendering in the browser's default — which is the one outcome
+        // bundling the faces exists to prevent.
+        params[spec.key] =
+          typeof value === 'string' && FONTS.some((font) => font.id === value)
+            ? value
             : spec.default
         break
     }

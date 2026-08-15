@@ -144,6 +144,10 @@ export interface ImageLayer extends LayerBase {
   asset: string
 }
 
+export interface TextLayer extends LayerBase {
+  kind: 'text'
+}
+
 export interface EffectLayer extends LayerBase {
   kind: 'effect'
   type: EffectType
@@ -154,11 +158,13 @@ export interface EffectLayer extends LayerBase {
  * is the one thing the compositor cannot infer, so it is carried by `kind`
  * rather than guessed from the pixels (see `compositeInto`).
  */
-export type Layer = GeneratorLayer | ImageLayer | EffectLayer
+export type Layer = GeneratorLayer | ImageLayer | TextLayer | EffectLayer
 
 export type LayerKind = Layer['kind']
 
-export function isSourceLayer(layer: Layer): layer is GeneratorLayer | ImageLayer {
+export function isSourceLayer(
+  layer: Layer,
+): layer is GeneratorLayer | ImageLayer | TextLayer {
   return layer.kind !== 'effect'
 }
 

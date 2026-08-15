@@ -1,7 +1,8 @@
+import { useState } from 'react'
 import { useLab } from '#/app/store'
 import { PALETTES } from '#/renderer/palettes'
 import { ParamControl } from './ParamControl'
-import { Segmented, Slider } from './controls'
+import { Section, Segmented, Slider } from './controls'
 import { layerHint, layerSpecs, layerTypeLabel } from './layerMeta'
 import {
   BLEND_MODES,
@@ -9,7 +10,13 @@ import {
   isFullRange,
   isShapeless,
 } from '#/renderer/types'
-import type { BlendMode, Layer, ShapeMask } from '#/renderer/types'
+import type { ParamSpec } from '#/renderer/params'
+import type {
+  BlendMode,
+  Layer,
+  ParamValue,
+  ShapeMask,
+} from '#/renderer/types'
 import { Dices, ImageOff, RotateCcw } from 'lucide-react'
 
 /**
@@ -279,16 +286,13 @@ export function LayerInspector() {
         className="border-t pt-4"
         style={{ borderColor: 'var(--color-line)' }}
       >
-        <div className="flex flex-col gap-3.5">
-          {layerSpecs(layer).map((spec) => (
-            <ParamControl
-              key={spec.key}
-              spec={spec}
-              value={layer.params[spec.key]}
-              onChange={(value) => setLayerParam(layer.id, spec.key, value)}
-            />
-          ))}
-        </div>
+        <LayerParams
+          // Remounting per layer is the point: which sections are expanded is
+          // a property of the layer being worked on, not of the panel.
+          key={layer.id}
+          layer={layer}
+          onChange={(key, value) => setLayerParam(layer.id, key, value)}
+        />
       </div>
 
       {'palette' in layer.params && (
@@ -297,6 +301,68 @@ export function LayerInspector() {
           onPick={(colors) => setLayerParam(layer.id, 'palette', colors)}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * A layer's own params, sectioned by the groups its spec list declares.
+ *
+ * Params without a group stay loose at the top — that is every effect and the
+ * field generator, which read fine as a flat list and should not grow a
+ * heading just because text layers needed them. A text layer declares eight
+ * groups and only the first opens, so the panel starts as a short menu of what
+ * can be changed rather than a wall of forty controls.
+ */
+function LayerParams({
+  layer,
+  onChange,
+}: {
+  layer: Layer
+  onChange: (key: string, value: ParamValue) => void
+}) {
+  const specs = layerSpecs(layer)
+  const loose = specs.filter((spec) => !spec.group)
+  const groups: Array<{ name: string; specs: Array<ParamSpec> }> = []
+
+  for (const spec of specs) {
+    if (!spec.group) continue
+    const existing = groups.find((group) => group.name === spec.group)
+    if (existing) existing.specs.push(spec)
+    else groups.push({ name: spec.group, specs: [spec] })
+  }
+
+  const [open, setOpen] = useState<Record<string, boolean>>(() =>
+    groups.length > 0 ? { [groups[0].name]: true } : {},
+  )
+
+  const control = (spec: ParamSpec) => (
+    <ParamControl
+      key={spec.key}
+      spec={spec}
+      value={layer.params[spec.key]}
+      onChange={(value) => onChange(spec.key, value)}
+    />
+  )
+
+  return (
+    <div className="flex flex-col gap-3.5">
+      {loose.map(control)}
+      {groups.map((group) => (
+        <Section
+          key={group.name}
+          label={group.name}
+          open={open[group.name] ?? false}
+          onToggle={() =>
+            setOpen((current) => ({
+              ...current,
+              [group.name]: !current[group.name],
+            }))
+          }
+        >
+          {group.specs.map(control)}
+        </Section>
+      ))}
     </div>
   )
 }

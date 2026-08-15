@@ -1,6 +1,7 @@
 import { EFFECTS } from './effects'
 import { renderField } from './generators/field'
 import { placeImage } from './layers/image'
+import { renderTextLayer } from './layers/text'
 import { compositeInto } from './blend'
 import {
   cloneBuffer,
@@ -151,6 +152,10 @@ function renderSourceLayer(
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(bitmap, box.x, box.y, box.width, box.height)
     return fromImageData(ctx.getImageData(0, 0, env.width, env.height))
+  }
+
+  if (layer.kind === 'text') {
+    return renderTextLayer(layer.params, env)
   }
 
   return null

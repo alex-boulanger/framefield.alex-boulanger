@@ -141,6 +141,13 @@ body {
     font-size: 11px;
   }
 
+  textarea.ff-input {
+    height: auto;
+    padding: 8px;
+    line-height: 1.4;
+    user-select: text;
+  }
+
   .ff-input:focus {
     outline: none;
     border-color: var(--color-signal-dim);
@@ -191,6 +198,64 @@ body {
   .ff-seg-item[data-active='true'] {
     background: var(--color-raised);
     color: var(--color-signal);
+  }
+
+  /*
+   * Typeface picker. Each cell is set in the face it selects, so the row of
+   * them reads as a specimen sheet rather than a list of names — which is the
+   * only way to choose type. Size is fixed at 15px: large enough that the
+   * difference between a grotesk and a slab is visible, small enough that ten
+   * of them fit the panel without scrolling.
+   */
+  .ff-font-item {
+    height: 30px;
+    padding: 0 6px;
+    background: var(--color-void);
+    border: 1px solid var(--color-line);
+    color: var(--color-label);
+    font-size: 15px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    transition:
+      color 120ms ease,
+      border-color 120ms ease;
+  }
+
+  .ff-font-item:hover {
+    color: var(--color-ink);
+  }
+
+  .ff-font-item[data-active='true'] {
+    background: var(--color-raised);
+    border-color: var(--color-signal-dim);
+    color: var(--color-signal);
+  }
+
+  /* Group heading inside the inspector. A button, so it reads as one. */
+  .ff-section {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 0;
+    background: transparent;
+    border: none;
+    border-top: 1px solid var(--color-line);
+    padding-top: 8px;
+    color: var(--color-label);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 120ms ease;
+  }
+
+  .ff-section:hover {
+    color: var(--color-ink);
   }
 }
 

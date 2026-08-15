@@ -6,6 +6,7 @@ import {
   renderStack,
   stackKeys,
 } from '#/renderer/renderRecipe'
+import { ensureFonts } from '#/renderer/fonts'
 import {
   FAST_RENDER_MS,
   interactiveRung,
@@ -132,6 +133,12 @@ export function CanvasViewport() {
   const settledTimerRef = useRef<number | null>(null)
   const latestWorkerIdRef = useRef(0)
   const [workerReady, setWorkerReady] = useState(false)
+  /**
+   * Only the fallback path needs this. The worker awaits the faces itself, but
+   * the main-thread render happens inside a frame callback that cannot await —
+   * so it draws with whatever is loaded and re-runs once the faces arrive.
+   */
+  const [fontsReady, setFontsReady] = useState(false)
   const [renderMs, setRenderMs] = useState(0)
   const [paintedScale, setPaintedScale] = useState(0)
   const bitmaps = useAssetBitmaps(assets, !workerReady)
@@ -331,6 +338,16 @@ export function CanvasViewport() {
   } | null>(null)
 
   useEffect(() => {
+    let live = true
+    void ensureFonts().then(() => {
+      if (live) setFontsReady(true)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || box.width === 0) return
 
@@ -391,6 +408,7 @@ export function CanvasViewport() {
     interactiveScale,
     settledScale,
     workerReady,
+    fontsReady,
     assets,
   ])
 

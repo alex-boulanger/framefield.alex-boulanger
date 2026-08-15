@@ -5,6 +5,7 @@ import {
   createEffectLayer,
   createImageLayer,
   createRandomRecipe,
+  createTextLayer,
   decodeRecipe,
   decodeRecipeAny,
   IMPORTED_ASSET,
@@ -19,6 +20,7 @@ import {
   withGeneratedNames,
 } from './recipe'
 import { EFFECT_ORDER } from './effects'
+import { DEFAULT_PALETTE } from './layers/text'
 import { renderRecipe } from './renderRecipe'
 import { PRESETS, recipeFromPreset } from './presets'
 
@@ -37,6 +39,19 @@ describe('createDefaultRecipe', () => {
       createEffectLayer('dither'),
     ].map((l) => l.id)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('createTextLayer', () => {
+  it('creates a 2D text source with visible defaults', () => {
+    const layer = createTextLayer()
+    expect(layer.kind).toBe('text')
+    expect(layer.name).toBe('2D Text')
+    expect(layer.params.text).toBe('FRAME\nFIELD')
+    expect(layer.params.font).toBe('anton')
+    // Colour is an index into the layer's own palette, never a raw swatch.
+    expect(layer.params.palette).toEqual(DEFAULT_PALETTE)
+    expect(typeof layer.params.ink).toBe('number')
   })
 })
 
@@ -450,6 +465,51 @@ describe('sanitizeRecipe', () => {
     expect(result?.layers[1].name).toBe('Ink pass')
     expect(result?.layers[2].name).toBeUndefined()
   })
+
+  it('sanitizes 2D text layers', () => {
+    const result = sanitizeRecipe({
+      version: 2,
+      canvas: { width: 100, height: 100 },
+      layers: [
+        {
+          kind: 'text',
+          id: 'text_1',
+          params: {
+            text: 'Hello\nFramefield',
+            font: 'bodoni',
+            fill: 'stripe',
+            width: 5000,
+            rotate: 900,
+          },
+        },
+      ],
+    })
+
+    const layer = result?.layers[0]
+    expect(layer?.kind).toBe('text')
+    expect(layer?.params.text).toBe('Hello\nFramefield')
+    expect(layer?.params.font).toBe('bodoni')
+    expect(layer?.params.fill).toBe('stripe')
+    expect(layer?.params.width).toBe(4096)
+    expect(layer?.params.rotate).toBe(180)
+  })
+
+  /**
+   * A face this build does not carry has to fall back to one it does. The
+   * alternative is `ctx.font` silently resolving to the browser's default,
+   * which is the outcome bundling the faces exists to prevent.
+   */
+  it('falls back when a recipe names an unknown typeface', () => {
+    const result = sanitizeRecipe({
+      version: 2,
+      canvas: { width: 100, height: 100 },
+      layers: [
+        { kind: 'text', id: 'text_1', params: { font: 'helvetica-neue' } },
+      ],
+    })
+
+    expect(result?.layers[0].params.font).toBe('anton')
+  })
 })
 
 describe('remixRecipe', () => {
@@ -503,6 +563,16 @@ describe('remixRecipe', () => {
     const after = remixRecipe(withImage)
     expect(after.layers.filter((layer) => layer.kind === 'image')).toEqual([
       image,
+    ])
+  })
+
+  it('keeps a 2D text layer rather than replacing it with a generator', () => {
+    const text = createTextLayer()
+    const withText = { ...createBlankRecipe(), layers: [text] }
+
+    const after = remixRecipe(withText)
+    expect(after.layers.filter((layer) => layer.kind === 'text')).toEqual([
+      text,
     ])
   })
 

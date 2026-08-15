@@ -5,6 +5,7 @@ import {
   randomizeField,
 } from './generators/field'
 import { IMAGE_DEFAULTS, IMAGE_PARAMS } from './layers/image'
+import { TEXT_DEFAULTS, TEXT_PARAMS } from './layers/text'
 import { PALETTES } from './palettes'
 import { createRng, randomSeed } from './rng'
 import { roundParam, sanitizeParams } from './params'
@@ -21,6 +22,7 @@ import type {
   Recipe,
   ShapeMask,
   ToneMask,
+  TextLayer,
 } from './types'
 
 export interface SizePreset {
@@ -87,6 +89,15 @@ export function createImageLayer(asset: string, name: string): ImageLayer {
   }
 }
 
+export function createTextLayer(): TextLayer {
+  return {
+    ...layerBase(),
+    kind: 'text',
+    name: '2D Text',
+    params: TEXT_DEFAULTS(),
+  }
+}
+
 /* -------------------------------------------------------------------------
  * Layer names
  * ---------------------------------------------------------------------- */
@@ -95,6 +106,7 @@ export function createImageLayer(asset: string, name: string): ImageLayer {
 export function layerTypeLabel(layer: Layer): string {
   if (layer.kind === 'effect') return EFFECTS[layer.type].label
   if (layer.kind === 'image') return 'Image'
+  if (layer.kind === 'text') return '2D Text'
   return 'Field'
 }
 
@@ -152,6 +164,7 @@ export function withGeneratedNames(layers: Array<Layer>): Array<Layer> {
 export function layerDefaults(layer: Layer): Layer['params'] {
   if (layer.kind === 'effect') return effectDefaults(layer.type)
   if (layer.kind === 'image') return IMAGE_DEFAULTS()
+  if (layer.kind === 'text') return TEXT_DEFAULTS()
   // The seed is the layer's identity, not a setting — resetting the controls
   // should not silently reroll the image underneath them.
   return { ...FIELD_DEFAULTS(), seed: layer.params.seed }
@@ -234,8 +247,34 @@ export function createDefaultRecipe(): Recipe {
     background: DEFAULT_BACKGROUND,
     layers: withGeneratedNames([
       createGeneratorLayer(DEFAULT_SEED),
+      createTextLayer(),
+      {
+        ...createEffectLayer('pixel-sort'),
+        opacity: 0.85,
+        params: {
+          ...effectDefaults('pixel-sort'),
+          rotation: '90',
+          low: 0.02,
+          high: 0.95,
+          sortBy: 'saturation',
+          maxRun: 240,
+        },
+      },
       { ...createEffectLayer('posterize'), opacity: 1 },
-      { ...createEffectLayer('dither'), opacity: 0.9 },
+      {
+        ...createEffectLayer('channel-drift'),
+        opacity: 0.9,
+        params: {
+          ...effectDefaults('channel-drift'),
+          redX: 28,
+          redY: -3,
+          blueX: -32,
+          blueY: 4,
+          jitter: 22,
+          jitterBands: 34,
+          seed: DEFAULT_SEED,
+        },
+      },
     ]),
   }
 }
@@ -266,7 +305,9 @@ export function createBlankRecipe(canvas: CanvasSize = DEFAULT_CANVAS): Recipe {
  * `randomizeField` and `randomizeFxStack` are what keep both usable rather than
  * merely different.
  */
-export function createRandomRecipe(canvas: CanvasSize = DEFAULT_CANVAS): Recipe {
+export function createRandomRecipe(
+  canvas: CanvasSize = DEFAULT_CANVAS,
+): Recipe {
   return remixRecipe({ ...createDefaultRecipe(), canvas: { ...canvas } })
 }
 
@@ -291,6 +332,58 @@ export function randomizeFxStack(current: Recipe): Recipe {
   const seed = randomSeed()
   const rng = createRng(`${seed}:remix`)
   const palette = paletteFromRecipe(current)
+  const hasText = current.layers.some((layer) => layer.kind === 'text')
+
+  if (hasText) {
+    const textFx: Array<EffectLayer> = []
+    const sort = createEffectLayer('pixel-sort')
+    sort.opacity = roundParam(rng.range(0.3, 0.6))
+    sort.params = {
+      ...sort.params,
+      rotation: rng.pick(['0', '90', '180', '270']),
+      low: 0,
+      high: 1,
+      sortBy: rng.pick(['luma', 'hue', 'saturation', 'red']),
+      maxRun: rng.int(36, 150),
+      reverse: rng.bool(0.45),
+    }
+    textFx.push(sort)
+
+    const drift = createEffectLayer('channel-drift')
+    drift.opacity = roundParam(rng.range(0.45, 0.75))
+    drift.params = {
+      ...drift.params,
+      redX: rng.int(-28, 28),
+      redY: rng.int(-7, 7),
+      blueX: rng.int(-28, 28),
+      blueY: rng.int(-7, 7),
+      jitter: rng.int(4, 18),
+      jitterBands: rng.int(8, 30),
+      scanlines: rng.bool(0.35) ? roundParam(rng.range(0.05, 0.18)) : 0,
+      seed,
+    }
+    textFx.push(drift)
+
+    if (rng.bool(0.6)) {
+      const bloom = createEffectLayer('bloom')
+      bloom.opacity = roundParam(rng.range(0.22, 0.45))
+      bloom.blendMode = rng.bool(0.65) ? 'screen' : 'normal'
+      bloom.params = {
+        ...bloom.params,
+        threshold: roundParam(rng.range(0.45, 0.72)),
+        amount: roundParam(rng.range(0.2, 0.65)),
+        radius: rng.int(6, 24),
+        palette: [rng.pick(palette)],
+        tint: roundParam(rng.range(0.2, 0.75)),
+      }
+      textFx.push(bloom)
+    }
+
+    const kept = current.layers.filter(
+      (layer) => isSourceLayer(layer) || layer.locked,
+    )
+    return { ...current, layers: withGeneratedNames([...kept, ...textFx]) }
+  }
 
   const layers: Array<EffectLayer> = []
 
@@ -522,7 +615,12 @@ export function remixRecipe(
   // an image rather than a bare background.
   const layers =
     generators.length === 0 && sources.length === 0
-      ? [{ ...createGeneratorLayer(seed), params: randomizeField(seed, palette) }]
+      ? [
+          {
+            ...createGeneratorLayer(seed),
+            params: randomizeField(seed, palette),
+          },
+        ]
       : reseeded
 
   return randomizeFxStack({
@@ -634,7 +732,10 @@ function sanitizeLayer(input: unknown): Layer | null {
 
   const type = raw.type as EffectType
   const kind =
-    raw.kind === 'generator' || raw.kind === 'image' || raw.kind === 'effect'
+    raw.kind === 'generator' ||
+    raw.kind === 'image' ||
+    raw.kind === 'text' ||
+    raw.kind === 'effect'
       ? raw.kind
       : EFFECT_ORDER.includes(type)
         ? 'effect'
@@ -662,7 +763,12 @@ function sanitizeLayer(input: unknown): Layer | null {
   }
 
   if (kind === 'effect') {
-    return { ...base, kind, type, params: sanitizeParams(EFFECTS[type].params, raw.params) }
+    return {
+      ...base,
+      kind,
+      type,
+      params: sanitizeParams(EFFECTS[type].params, raw.params),
+    }
   }
 
   if (kind === 'image') {
@@ -671,6 +777,14 @@ function sanitizeLayer(input: unknown): Layer | null {
       kind,
       asset: typeof raw.asset === 'string' ? raw.asset : IMPORTED_ASSET,
       params: sanitizeParams(IMAGE_PARAMS, raw.params),
+    }
+  }
+
+  if (kind === 'text') {
+    return {
+      ...base,
+      kind,
+      params: sanitizeParams(TEXT_PARAMS, raw.params),
     }
   }
 

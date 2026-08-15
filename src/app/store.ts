@@ -5,6 +5,7 @@ import {
   createEffectLayer,
   createGeneratorLayer,
   createImageLayer,
+  createTextLayer,
   baseLayerName,
   createLayerId,
   layerDefaults,
@@ -101,6 +102,7 @@ export interface LabState {
   addEffectLayer: (type: EffectType) => void
   addGeneratorLayer: () => void
   addImageLayer: (url: string, name: string) => void
+  addTextLayer: () => void
   removeLayer: (id: string) => void
   duplicateLayer: (id: string) => void
   toggleLayer: (id: string) => void
@@ -172,12 +174,17 @@ function samePalette(a: unknown, b: unknown) {
 /**
  * Recolouring a generator carries its treatments with it.
  *
- * Two limits, both learned the hard way. Only effect layers follow: a second
- * generator is a compositional choice with its own colourway, and recolouring
- * one field must not silently repaint the other. And only effects that still
- * match the *old* palette follow, so a layer the user deliberately set stays
- * set. Without any of this, a preset loses its colour scheme the moment the
- * field is recoloured.
+ * Two limits, both learned the hard way. A second *generator* never follows: it
+ * is a compositional choice with its own colourway, and recolouring one field
+ * must not silently repaint the other. And only layers that still match the
+ * *old* palette follow, so a layer the user deliberately set stays set.
+ * Without any of this, a preset loses its colour scheme the moment the field is
+ * recoloured.
+ *
+ * Text layers follow alongside the effects, which is the whole reason their
+ * colours are palette indices rather than swatches: a headline is part of the
+ * artwork's colourway, not a label sitting on top of it, so recolouring the
+ * picture has to recolour the words.
  */
 function syncInheritedLayerPalettes(
   layers: Array<Layer>,
@@ -187,7 +194,7 @@ function syncInheritedLayerPalettes(
   if (!Array.isArray(nextPalette)) return layers
 
   return layers.map((layer) =>
-    layer.kind === 'effect' &&
+    layer.kind !== 'generator' &&
     samePalette(layer.params.palette, previousPalette)
       ? {
           ...layer,
@@ -333,6 +340,8 @@ export const useLab = create<LabState>((set) => ({
         assets: { ...state.assets, [asset]: url },
       }
     }),
+
+  addTextLayer: () => set((state) => appendLayer(state, createTextLayer())),
 
   removeLayer: (id) =>
     set((state) => {

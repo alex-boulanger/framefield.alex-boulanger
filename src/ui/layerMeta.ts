@@ -1,6 +1,7 @@
 import { EFFECTS } from '#/renderer/effects'
 import { FIELD_PARAMS } from '#/renderer/generators/field'
 import { IMAGE_PARAMS } from '#/renderer/layers/image'
+import { TEXT_PARAMS } from '#/renderer/layers/text'
 import type { ParamSpec } from '#/renderer/params'
 import type { Layer } from '#/renderer/types'
 
@@ -16,6 +17,7 @@ import type { Layer } from '#/renderer/types'
 export function layerSpecs(layer: Layer): Array<ParamSpec> {
   if (layer.kind === 'effect') return EFFECTS[layer.type].params
   if (layer.kind === 'image') return IMAGE_PARAMS
+  if (layer.kind === 'text') return TEXT_PARAMS
   return FIELD_PARAMS
 }
 
@@ -31,6 +33,9 @@ export function layerHint(layer: Layer): string {
   if (layer.kind === 'effect') return EFFECTS[layer.type].hint
   if (layer.kind === 'image') {
     return 'Imported pixels, placed in the frame. Layers above it treat it like any other source.'
+  }
+  if (layer.kind === 'text') {
+    return 'Editable flat text, placed in the frame. Layers above it treat it like any other source.'
   }
   return 'A procedural field. Blend it with what is beneath, or let the stack above treat it.'
 }

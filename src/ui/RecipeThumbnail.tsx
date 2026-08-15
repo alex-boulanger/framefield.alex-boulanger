@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { renderRecipe } from '#/renderer/renderRecipe'
 import { toImageData } from '#/renderer/buffer'
+import { ensureFonts } from '#/renderer/fonts'
 import { Trash2 } from 'lucide-react'
 import type { Recipe } from '#/renderer/types'
 
@@ -44,7 +45,14 @@ export function RecipeThumbnail({
         ? requestIdleCallback
         : (fn: () => void) => setTimeout(fn, 60)
 
-    const handle = schedule(() => {
+    let cancelled = false
+
+    const handle = schedule(async () => {
+      // A thumbnail of a text recipe drawn in the fallback face is a thumbnail
+      // of a different recipe, so the faces are worth the extra tick.
+      await ensureFonts()
+      if (cancelled) return
+
       try {
         /**
          * Rendered as a true miniature: full canvas size, scaled down.
@@ -70,6 +78,7 @@ export function RecipeThumbnail({
     })
 
     return () => {
+      cancelled = true
       if (
         typeof cancelIdleCallback === 'function' &&
         typeof handle === 'number'

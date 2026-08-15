@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useLab } from '#/app/store'
 import { SIZE_PRESETS } from '#/renderer/recipe'
 import { renderToPngBlob } from '#/renderer/renderRecipe'
+import { ensureFonts } from '#/renderer/fonts'
 import { Segmented } from './controls'
 import {
   SHORTCUTS,
@@ -128,6 +129,7 @@ export function ExportPanel() {
         blob = await renderExportInWorker(recipe, assets)
       } catch {
         const bitmaps = await decodeAssets(assets)
+        await ensureFonts()
         try {
           blob = await renderToPngBlob({ recipe, assets: bitmaps })
         } finally {

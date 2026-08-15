@@ -1,4 +1,6 @@
 import { useId } from 'react'
+import { ChevronRight } from 'lucide-react'
+import { FONTS, fontFamilyCss } from '#/renderer/fonts'
 
 /**
  * Control primitives. Native elements wherever they suffice (range, checkbox,
@@ -213,6 +215,84 @@ export function PaletteEditor({
   )
 }
 
+/**
+ * Typeface picker. Each face is drawn in itself, because the name of a
+ * typeface tells you nothing and the shape of it tells you everything.
+ */
+export function FontPicker({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <Field label={label}>
+      <div className="grid grid-cols-2 gap-1">
+        {FONTS.map((font) => (
+          <button
+            key={font.id}
+            type="button"
+            data-active={font.id === value}
+            aria-pressed={font.id === value}
+            title={`${font.label} — ${font.category}`}
+            onClick={() => onChange(font.id)}
+            className="ff-font-item"
+            style={{
+              fontFamily: fontFamilyCss(font.id),
+              fontWeight: font.weight,
+            }}
+          >
+            {font.label}
+          </button>
+        ))}
+      </div>
+    </Field>
+  )
+}
+
+/**
+ * A collapsible run of params.
+ *
+ * Open state is the caller's, not the section's: which sections a layer shows
+ * expanded has to survive re-renders and reset when the selection changes, and
+ * only the inspector knows when that happened.
+ */
+export function Section({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="ff-section"
+      >
+        <ChevronRight
+          size={11}
+          style={{
+            transform: open ? 'rotate(90deg)' : 'none',
+            transition: 'transform 120ms',
+          }}
+        />
+        {label}
+      </button>
+      {open && <div className="flex flex-col gap-3.5 pl-0.5">{children}</div>}
+    </div>
+  )
+}
+
 export function TextInput({
   label,
   value,
@@ -221,6 +301,7 @@ export function TextInput({
   placeholder,
   maxLength,
   mono,
+  multiline,
 }: {
   label: string
   value: string
@@ -229,25 +310,66 @@ export function TextInput({
   placeholder?: string
   maxLength?: number
   mono?: boolean
+  multiline?: boolean
 }) {
   return (
     <Field label={label}>
       <div className="flex gap-1.5">
-        <input
-          className="ff-input"
-          value={value}
-          aria-label={label}
-          placeholder={placeholder}
-          maxLength={maxLength}
-          spellCheck={false}
-          autoComplete="off"
-          // Ramps are read as a sequence of glyphs, so they need to be shown
-          // in the same kind of face they will be rendered in.
-          style={mono ? { letterSpacing: '0.08em' } : undefined}
-          onChange={(event) => onChange(event.target.value)}
-        />
+        {multiline ? (
+          <textarea
+            className="ff-input min-h-24 resize-y"
+            value={value}
+            aria-label={label}
+            placeholder={placeholder}
+            maxLength={maxLength}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => onChange(event.target.value)}
+          />
+        ) : (
+          <input
+            className="ff-input"
+            value={value}
+            aria-label={label}
+            placeholder={placeholder}
+            maxLength={maxLength}
+            spellCheck={false}
+            autoComplete="off"
+            // Ramps are read as a sequence of glyphs, so they need to be shown
+            // in the same kind of face they will be rendered in.
+            style={mono ? { letterSpacing: '0.08em' } : undefined}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        )}
         {action}
       </div>
+    </Field>
+  )
+}
+
+export function ColorInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <Field label={label} value={value}>
+      <label
+        className="relative flex h-7 cursor-pointer border"
+        style={{ borderColor: 'var(--color-line)', background: value }}
+      >
+        <input
+          type="color"
+          value={value}
+          aria-label={label}
+          onChange={(event) => onChange(event.target.value)}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        />
+      </label>
     </Field>
   )
 }

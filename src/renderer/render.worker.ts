@@ -1,4 +1,5 @@
 import { toImageData } from './buffer'
+import { ensureFonts } from './fonts'
 import {
   commonPrefix,
   renderStack,
@@ -99,6 +100,11 @@ self.onmessage = async (event: MessageEvent<RenderWorkerRequest>) => {
 
   try {
     const start = performance.now()
+    // Before the first stroke, not per layer: a text layer measured against a
+    // fallback face lays out to different line breaks than the real one, so a
+    // frame rendered mid-load is not a coarser version of the final image but
+    // a different composition. Memoized, so this is one await after the first.
+    await ensureFonts()
     const assets = await decodeAssets(request.assets ?? {})
 
     if (request.kind === 'export') {

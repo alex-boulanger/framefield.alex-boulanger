@@ -1,4 +1,12 @@
-import { PaletteEditor, Segmented, Slider, TextInput, Toggle } from './controls'
+import {
+  ColorInput,
+  FontPicker,
+  PaletteEditor,
+  Segmented,
+  Slider,
+  TextInput,
+  Toggle,
+} from './controls'
 import { randomSeed } from '#/renderer/rng'
 import type { ParamSpec } from '#/renderer/params'
 import type { ParamValue } from '#/renderer/types'
@@ -66,7 +74,26 @@ export function ParamControl({
           value={typeof value === 'string' ? value : spec.default}
           placeholder={spec.placeholder}
           maxLength={spec.maxLength}
+          multiline={spec.multiline}
           mono
+          onChange={onChange}
+        />
+      )
+
+    case 'font':
+      return (
+        <FontPicker
+          label={spec.label}
+          value={typeof value === 'string' ? value : spec.default}
+          onChange={onChange}
+        />
+      )
+
+    case 'color':
+      return (
+        <ColorInput
+          label={spec.label}
+          value={typeof value === 'string' ? value : spec.default}
           onChange={onChange}
         />
       )

@@ -4,6 +4,7 @@ import {
   createEffectLayer,
   createGeneratorLayer,
   createImageLayer,
+  createTextLayer,
 } from './recipe'
 import type { EffectType, Layer, LayerBase, Params, Recipe } from './types'
 import { createBuffer } from './buffer'
@@ -363,6 +364,11 @@ function imageLayer(
   return { ...created, ...overrides, params: { ...created.params, ...params } }
 }
 
+function textLayer(params: Params = {}, overrides: Partial<LayerBase> = {}): Layer {
+  const created = createTextLayer()
+  return { ...created, ...overrides, params: { ...created.params, ...params } }
+}
+
 /**
  * Stand in for the one canvas the pipeline still touches.
  *
@@ -407,6 +413,61 @@ function halfCovered(size: number): ImageData {
 }
 
 describe('source layers', () => {
+  it('renders a 2D text layer as source pixels', () => {
+    const result = renderRecipe({
+      recipe: recipe(
+        [
+          textLayer({
+            text: 'A',
+            width: 32,
+            height: 16,
+            size: 12,
+            fill: '#ffffff',
+          }),
+        ],
+        64,
+      ),
+    })
+
+    expect(meanLuminance(result)).toBeGreaterThan(0)
+    expect(pixel(result, 0, 0)[0]).toBeCloseTo(0, 5)
+  })
+
+  it('treats 2D text with later effects', () => {
+    const text = textLayer({
+      text: 'A',
+      width: 32,
+      height: 16,
+      size: 12,
+      fill: '#888888',
+    })
+    const plain = renderRecipe({ recipe: recipe([text], 64) })
+    const treated = renderRecipe({
+      recipe: recipe([text, layer('posterize', { levels: 2, mode: 'rgb' })], 64),
+    })
+
+    expect(Array.from(treated.data)).not.toEqual(Array.from(plain.data))
+  })
+
+  it('gives pixel sort textured 2D text to reorder', () => {
+    const text = textLayer({
+      text: 'The quick brown fox jumps over the lazy dog',
+      width: 56,
+      height: 44,
+      size: 12,
+      treatment: 'stripes',
+    })
+    const plain = renderRecipe({ recipe: recipe([text], 64) })
+    const sorted = renderRecipe({
+      recipe: recipe(
+        [text, layer('pixel-sort', { low: 0, high: 1, maxRun: 64 })],
+        64,
+      ),
+    })
+
+    expect(Array.from(sorted.data)).not.toEqual(Array.from(plain.data))
+  })
+
   it('composites by coverage rather than replacing the stack', () => {
     const beneath = gradient(16, 16)
     const result = withFakeCanvas(halfCovered(16), () =>

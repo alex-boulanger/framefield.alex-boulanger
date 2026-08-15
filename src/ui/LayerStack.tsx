@@ -29,6 +29,7 @@ import {
   Shuffle,
   Sparkles,
   Trash2,
+  Type,
 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { layerTypeLabel } from './layerMeta'
@@ -57,6 +58,7 @@ export function LayerStack() {
   const addEffectLayer = useLab((state) => state.addEffectLayer)
   const addGeneratorLayer = useLab((state) => state.addGeneratorLayer)
   const addImageLayer = useLab((state) => state.addImageLayer)
+  const addTextLayer = useLab((state) => state.addTextLayer)
   const randomizeFxStack = useLab((state) => state.randomizeFxStack)
   const soloLayerId = useLab((state) => state.soloLayerId)
   const toggleSolo = useLab((state) => state.toggleSolo)
@@ -167,6 +169,17 @@ export function LayerStack() {
           >
             <ImageIcon size={13} />
             Image…
+          </button>
+          <button
+            type="button"
+            className="ff-btn justify-start"
+            onClick={() => {
+              addTextLayer()
+              setAdding(false)
+            }}
+          >
+            <Type size={13} />
+            2D Text
           </button>
 
           <span className="ff-label pt-2">Effects</span>

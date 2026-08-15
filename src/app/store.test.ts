@@ -162,7 +162,11 @@ describe('generator palette changes', () => {
     useLab.getState().setLayerParam(paletteLayer.id, 'palette', customPalette)
     useLab
       .getState()
-      .setLayerParam(generatorId(), 'palette', ['#110000', '#ffeeee', '#ff3300'])
+      .setLayerParam(generatorId(), 'palette', [
+        '#110000',
+        '#ffeeee',
+        '#ff3300',
+      ])
 
     const layer = useLab
       .getState()
@@ -221,8 +225,11 @@ describe('newArtwork', () => {
 })
 
 describe('viewRecipe', () => {
-  const view = (recipe: Recipe, comparing: boolean, soloLayerId: string | null) =>
-    viewRecipe(recipe, { comparing, soloLayerId })
+  const view = (
+    recipe: Recipe,
+    comparing: boolean,
+    soloLayerId: string | null,
+  ) => viewRecipe(recipe, { comparing, soloLayerId })
 
   it('is the document itself when nothing is active', () => {
     const recipe = createDefaultRecipe()
@@ -233,7 +240,9 @@ describe('viewRecipe', () => {
     const recipe = createDefaultRecipe()
     const compared = view(recipe, true, null)
     expect(compared.layers.every((layer) => layer.kind !== 'effect')).toBe(true)
-    expect(compared.layers.length).toBe(1)
+    expect(compared.layers.length).toBe(
+      recipe.layers.filter((layer) => layer.kind !== 'effect').length,
+    )
   })
 
   /**
@@ -244,9 +253,10 @@ describe('viewRecipe', () => {
     const recipe = createDefaultRecipe()
     const effect = recipe.layers.find((layer) => layer.kind === 'effect')!
     const soloed = view(recipe, false, effect.id)
+    const sources = recipe.layers.filter((layer) => layer.kind !== 'effect')
 
     expect(soloed.layers.map((layer) => layer.id)).toEqual([
-      recipe.layers[0].id,
+      ...sources.map((layer) => layer.id),
       effect.id,
     ])
   })
@@ -260,7 +270,9 @@ describe('viewRecipe', () => {
   it('lets compare win over solo', () => {
     const recipe = createDefaultRecipe()
     const effect = recipe.layers.find((layer) => layer.kind === 'effect')!
-    expect(view(recipe, true, effect.id).layers).toEqual([recipe.layers[0]])
+    expect(view(recipe, true, effect.id).layers).toEqual(
+      recipe.layers.filter((layer) => layer.kind !== 'effect'),
+    )
   })
 
   it('ignores a solo id that is no longer in the stack', () => {
@@ -310,11 +322,16 @@ describe('editing mixed layer kinds', () => {
     const generator = useLab.getState().selectedLayerId!
     useLab.getState().addImageLayer('blob:test', 'photo.jpg')
     const image = useLab.getState().selectedLayerId!
+    useLab.getState().addTextLayer()
+    const text = useLab.getState().selectedLayerId!
     useLab.getState().addEffectLayer('grain')
     const effect = useLab.getState().selectedLayerId!
 
-    const kinds = useLab.getState().recipe.layers.slice(-3).map((l) => l.kind)
-    expect(kinds).toEqual(['generator', 'image', 'effect'])
+    const kinds = useLab
+      .getState()
+      .recipe.layers.slice(-3)
+      .map((l) => l.kind)
+    expect(kinds).toEqual(['image', 'text', 'effect'])
 
     // The import's pixels live outside the document, keyed by handle.
     const layer = useLab
@@ -339,6 +356,9 @@ describe('editing mixed layer kinds', () => {
       .getState()
       .recipe.layers.find((entry) => entry.id === generator)
     expect(original?.params.scale).not.toBe(9)
+
+    useLab.getState().selectLayer(text)
+    expect(useLab.getState().selectedLayerId).toBe(text)
   })
 
   it('keeps an imported asset available after undoing its layer', () => {
@@ -371,6 +391,7 @@ describe('editing mixed layer kinds', () => {
   it('randomize-FX leaves every non-effect layer untouched', () => {
     useLab.getState().hydrateRecipe(createDefaultRecipe())
     useLab.getState().addImageLayer('blob:test', 'photo.jpg')
+    useLab.getState().addTextLayer()
 
     const before = useLab
       .getState()
