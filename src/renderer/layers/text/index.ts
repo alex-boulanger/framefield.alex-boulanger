@@ -6,6 +6,7 @@ import type { PixelBuffer } from '../../buffer'
 import type { Params, RenderEnv } from '../../types'
 
 export { TEXT_PARAMS, TEXT_DEFAULTS, DEFAULT_PALETTE } from './params'
+export { randomizeText } from './random'
 export { layoutText } from './layout'
 export { unwarp } from './place'
 export { textSettings } from './settings'

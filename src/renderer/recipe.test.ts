@@ -10,6 +10,7 @@ import {
   decodeRecipeAny,
   IMPORTED_ASSET,
   encodeRecipe,
+  paletteFromRecipe,
   encodeRecipeCompressed,
   randomizeFxStack,
   remixRecipe,
@@ -580,10 +581,51 @@ describe('remixRecipe', () => {
     const text = createTextLayer()
     const withText = { ...createBlankRecipe(), layers: [text] }
 
-    const after = remixRecipe(withText)
-    expect(after.layers.filter((layer) => layer.kind === 'text')).toEqual([
-      text,
-    ])
+    const kept = remixRecipe(withText).layers.filter(
+      (layer) => layer.kind === 'text',
+    )
+    expect(kept.length).toBe(1)
+    expect(kept[0].id).toBe(text.id)
+  })
+
+  /**
+   * The opening frame is a remix, so type that remixes to the same setting
+   * every time is type the user sees identically on every first load.
+   */
+  it('rerolls the typography, keeping the words', () => {
+    const before = createDefaultRecipe()
+    const original = before.layers.find((layer) => layer.kind === 'text')
+
+    const settings = new Set(
+      Array.from({ length: 20 }, () => {
+        const after = remixRecipe(before)
+        const text = after.layers.find((layer) => layer.kind === 'text')
+        expect(text?.params.text).toBe(original?.params.text)
+        return JSON.stringify(text?.params)
+      }),
+    )
+    expect(settings.size).toBeGreaterThan(15)
+  })
+
+  /**
+   * A headline is part of the artwork's colourway, not a label on top of it —
+   * the same reason its colours are palette indices rather than swatches.
+   */
+  it('recolours the words with the stack', () => {
+    for (let i = 0; i < 20; i++) {
+      const after = remixRecipe(createDefaultRecipe())
+      const text = after.layers.find((layer) => layer.kind === 'text')
+      expect(text?.params.palette).toEqual(paletteFromRecipe(after))
+    }
+  })
+
+  it('leaves a locked text layer exactly as it was', () => {
+    const text = { ...createTextLayer(), locked: true }
+    const withText = { ...createBlankRecipe(), layers: [text] }
+
+    expect(
+      remixRecipe(withText).layers.filter((layer) => layer.kind === 'text'),
+    ).toEqual([text])
   })
 
   it('leaves canvas size alone', () => {

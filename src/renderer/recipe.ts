@@ -5,7 +5,7 @@ import {
   randomizeField,
 } from './generators/field'
 import { IMAGE_DEFAULTS, IMAGE_PARAMS } from './layers/image'
-import { TEXT_DEFAULTS, TEXT_PARAMS } from './layers/text'
+import { TEXT_DEFAULTS, TEXT_PARAMS, randomizeText } from './layers/text'
 import { PALETTES } from './palettes'
 import { createRng, randomSeed } from './rng'
 import { roundParam, sanitizeParams } from './params'
@@ -629,19 +629,45 @@ export function remixRecipe(
   const sources = current.layers.filter(isSourceLayer)
   const generators = sources.filter((layer) => layer.kind === 'generator')
 
-  const reseeded = sources.map((layer, index) =>
+  const reseeded = sources.map((layer, index) => {
     // A locked source keeps its seed and its parameters untouched. Its palette
     // is left alone too: rerolling the colourway of a layer the user pinned
     // would defeat the lock in the most visible way possible.
-    layer.kind === 'generator' && !layer.locked
-      ? {
-          ...layer,
-          // Distinct seeds per generator, so stacked fields do not come out as
-          // the same image twice; one shared palette, so they read as one work.
-          params: randomizeField(`${seed}:${index}`, palette),
-        }
-      : layer,
-  )
+    if (layer.locked) return layer
+
+    if (layer.kind === 'generator') {
+      return {
+        ...layer,
+        // Distinct seeds per generator, so stacked fields do not come out as
+        // the same image twice; one shared palette, so they read as one work.
+        params: randomizeField(`${seed}:${index}`, palette),
+      }
+    }
+
+    /**
+     * Type is rerolled the way a field is, and for the same reason.
+     *
+     * The app opens on a remix, so whatever the text layer looks like here is
+     * what every first load looked like — one face, one size, one setting, on
+     * top of a field that was different every time. Rerolling the typography
+     * alongside the field is what makes the opening frame actually vary, and
+     * it costs nothing the user cannot pin: the string itself survives (it is
+     * their content, not a treatment), and a locked layer is already out above.
+     */
+    if (layer.kind === 'text') {
+      return {
+        ...layer,
+        params: randomizeText(
+          `${seed}:${index}`,
+          palette,
+          current.canvas,
+          layer.params,
+        ),
+      }
+    }
+
+    return layer
+  })
 
   // A recipe with nothing to treat gets a generator, so remix always produces
   // an image rather than a bare background.
