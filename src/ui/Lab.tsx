@@ -8,7 +8,7 @@ import {
   savePanelLayout,
 } from '#/app/panelLayout'
 import { CanvasViewport } from './CanvasViewport'
-import { PresetStrip } from './PresetStrip'
+import { SavedPresets } from './SavedPresets'
 import { VariationGrid } from './VariationGrid'
 import { LayerStack } from './LayerStack'
 import { LayerInspector } from './LayerInspector'
@@ -179,14 +179,15 @@ export function Lab() {
         >
           <div className="flex min-h-full flex-col gap-5">
             {/* Ordered by fastest route to a good image: variations of what
-                is already on screen, then saved and curated starting points.
-                Layer editing lives on the right, with the stack it edits. */}
+                is already on screen, then the user's own saved starting
+                points. Layer editing lives on the right, with the stack it
+                edits. */}
             <VariationGrid />
             <div
               className="border-t pt-5"
               style={{ borderColor: 'var(--color-line)' }}
             >
-              <PresetStrip />
+              <SavedPresets />
             </div>
             <div
               className="border-t pt-5"

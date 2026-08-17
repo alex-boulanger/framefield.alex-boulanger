@@ -255,10 +255,22 @@ describe('viewRecipe', () => {
     const soloed = view(recipe, false, effect.id)
     const sources = recipe.layers.filter((layer) => layer.kind !== 'effect')
 
-    expect(soloed.layers.map((layer) => layer.id)).toEqual([
-      ...sources.map((layer) => layer.id),
-      effect.id,
-    ])
+    // Every source, and that one effect and no other.
+    expect(soloed.layers.filter((layer) => layer.kind !== 'effect')).toEqual(
+      sources,
+    )
+    expect(
+      soloed.layers
+        .filter((layer) => layer.kind === 'effect')
+        .map((layer) => layer.id),
+    ).toEqual([effect.id])
+
+    // Kept in document order, which is not the same as "sources, then the
+    // effect": the 2D text layer composites above the damage.
+    const positions = soloed.layers.map((layer) =>
+      recipe.layers.findIndex((entry) => entry.id === layer.id),
+    )
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
   })
 
   it('shows a soloed source entirely alone', () => {
@@ -401,6 +413,11 @@ describe('editing mixed layer kinds', () => {
       .getState()
       .recipe.layers.filter((layer) => layer.kind !== 'effect')
 
-    expect(after).toEqual(before)
+    // Matched by id rather than by position: a stack with type in it lifts the
+    // text layers over the effects so the words stay readable, which moves
+    // them past the other sources. The layers themselves are untouched.
+    const byId = (layers: Recipe['layers']) =>
+      [...layers].sort((a, b) => a.id.localeCompare(b.id))
+    expect(byId(after)).toEqual(byId(before))
   })
 })

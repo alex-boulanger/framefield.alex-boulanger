@@ -2,7 +2,6 @@ import { it } from 'vitest'
 import { writeFileSync } from 'node:fs'
 import { renderRecipe, renderStack } from './src/renderer/renderRecipe'
 import { createDefaultRecipe, createEffectLayer } from './src/renderer/recipe'
-import { PRESETS, recipeFromPreset } from './src/renderer/presets'
 import type { EffectType, Layer, Params, Recipe } from './src/renderer/types'
 
 /** Temporary benchmark harness. Deleted after measuring. */
@@ -96,17 +95,6 @@ it('bench', () => {
     lines.push(
       time(`  ${type}`, () =>
         renderRecipe({ recipe, scale: PREVIEW_SCALE, resume: source }),
-      ),
-    )
-  }
-
-  lines.push('')
-  lines.push('--- presets, preview, cold ---')
-  for (const preset of PRESETS) {
-    const recipe = recipeFromPreset(preset, CANVAS)
-    lines.push(
-      time(`  ${preset.name}`, () =>
-        renderRecipe({ recipe, scale: PREVIEW_SCALE }),
       ),
     )
   }

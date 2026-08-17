@@ -10,7 +10,7 @@ import type { Recipe } from '#/renderer/types'
  *
  * Produced by the real pipeline rather than shipped as an image: it cannot
  * drift out of sync with the effects, and it costs nothing to point at a new
- * recipe. Shared by the preset strip and the variation grid so there is one
+ * recipe. Shared by the variation grid and the saved presets so there is one
  * answer to how a thumbnail is rendered and deferred.
  */
 
@@ -59,7 +59,7 @@ export function RecipeThumbnail({
          *
          * Building the recipe at thumbnail dimensions instead would leave
          * spatial params at export scale — a 12px pixelate cell is a quarter
-         * of a 52px thumbnail, which flattened the Low-res preset to a single
+         * of a 52px thumbnail, which flattened any chunky stack to a single
          * solid colour. Going through `scale` is exactly what the export-space
          * param convention exists for.
          */

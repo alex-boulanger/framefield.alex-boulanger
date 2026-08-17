@@ -22,7 +22,7 @@ import {
 import { EFFECT_ORDER } from './effects'
 import { DEFAULT_PALETTE } from './layers/text'
 import { renderRecipe } from './renderRecipe'
-import { PRESETS, recipeFromPreset } from './presets'
+import type { Recipe } from './types'
 
 describe('createDefaultRecipe', () => {
   it('opens with a non-empty stack so first paint is interesting', () => {
@@ -40,7 +40,22 @@ describe('createDefaultRecipe', () => {
     ].map((l) => l.id)
     expect(new Set(ids).size).toBe(ids.length)
   })
+
+  /**
+   * The type is above the damage with only the bloom over it, which is what
+   * makes the words on first paint readable rather than sorted into streaks.
+   */
+  it('puts the 2D text layer directly under the bloom', () => {
+    expect(topOfStack(createDefaultRecipe())).toEqual(['text', 'bloom'])
+  })
 })
+
+/** The kinds of the top two layers, as `'text'` / an effect type. */
+function topOfStack(recipe: Recipe): Array<string> {
+  return recipe.layers
+    .slice(-2)
+    .map((layer) => (layer.kind === 'effect' ? layer.type : layer.kind))
+}
 
 describe('createTextLayer', () => {
   it('creates a 2D text source with visible defaults', () => {
@@ -162,11 +177,6 @@ describe('generated layer names', () => {
       expect(names.every(Boolean)).toBe(true)
       expect(new Set(names).size).toBe(names.length)
     }
-  })
-
-  it('names preset layers too', () => {
-    const recipe = recipeFromPreset(PRESETS[0], { width: 100, height: 100 })
-    expect(recipe.layers.every((layer) => Boolean(layer.name))).toBe(true)
   })
 
   describe('uniqueLayerName', () => {
@@ -601,7 +611,13 @@ describe('randomizeFxStack', () => {
     const image = createImageLayer('asset_1', 'photo.jpg')
     const after = randomizeFxStack({
       ...base,
-      layers: [base.layers[0], image, ...base.layers.slice(1)],
+      // No text layer: type is the one source that deliberately rides above
+      // the damage, and it has its own test below.
+      layers: [
+        base.layers[0],
+        image,
+        ...base.layers.filter((layer) => layer.kind === 'effect'),
+      ],
     })
 
     const firstEffect = after.layers.findIndex((l) => l.kind === 'effect')
@@ -610,6 +626,27 @@ describe('randomizeFxStack', () => {
       -1,
     )
     expect(lastSource).toBeLessThan(firstEffect)
+  })
+
+  /**
+   * The arrangement the app opens on, pinned.
+   *
+   * Every remix of a document with type has to land here, not just the first
+   * one: the opening document is a remix of the default, so a stack that puts
+   * the pixel sort over the words is what the user would see on load.
+   */
+  it('lifts 2D text above the damage and under the bloom', () => {
+    for (let i = 0; i < 50; i++) {
+      const after = randomizeFxStack(createDefaultRecipe())
+      expect(topOfStack(after)).toEqual(['text', 'bloom'])
+
+      // And there is something underneath for it to composite over.
+      expect(
+        after.layers
+          .slice(0, -2)
+          .some((layer) => layer.kind === 'effect' && layer.type !== 'bloom'),
+      ).toBe(true)
+    }
   })
 
   it('survives its own sanitizer, so every FX stack is shareable', () => {

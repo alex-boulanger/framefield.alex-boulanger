@@ -239,6 +239,10 @@ const DEFAULT_SEED = 'framefield'
  * A real composition rather than a bare generator: the quality bar says first
  * load must show an interesting image with no input, and this is what the
  * static HTML is prerendered from.
+ *
+ * The type sits above the damage with only the bloom over it, so the words
+ * stay readable — `randomizeFxStack` explains why, and keeps every remix of
+ * this document in the same shape.
  */
 export function createDefaultRecipe(): Recipe {
   return {
@@ -247,7 +251,6 @@ export function createDefaultRecipe(): Recipe {
     background: DEFAULT_BACKGROUND,
     layers: withGeneratedNames([
       createGeneratorLayer(DEFAULT_SEED),
-      createTextLayer(),
       {
         ...createEffectLayer('pixel-sort'),
         opacity: 0.85,
@@ -273,6 +276,19 @@ export function createDefaultRecipe(): Recipe {
           jitter: 22,
           jitterBands: 34,
           seed: DEFAULT_SEED,
+        },
+      },
+      createTextLayer(),
+      {
+        ...createEffectLayer('bloom'),
+        opacity: 0.35,
+        blendMode: 'screen',
+        params: {
+          ...effectDefaults('bloom'),
+          threshold: 0.6,
+          amount: 0.45,
+          radius: 16,
+          tint: 0.5,
         },
       },
     ]),
@@ -364,25 +380,41 @@ export function randomizeFxStack(current: Recipe): Recipe {
     }
     textFx.push(drift)
 
-    if (rng.bool(0.6)) {
-      const bloom = createEffectLayer('bloom')
-      bloom.opacity = roundParam(rng.range(0.22, 0.45))
-      bloom.blendMode = rng.bool(0.65) ? 'screen' : 'normal'
-      bloom.params = {
-        ...bloom.params,
-        threshold: roundParam(rng.range(0.45, 0.72)),
-        amount: roundParam(rng.range(0.2, 0.65)),
-        radius: rng.int(6, 24),
-        palette: [rng.pick(palette)],
-        tint: roundParam(rng.range(0.2, 0.75)),
-      }
-      textFx.push(bloom)
+    const bloom = createEffectLayer('bloom')
+    bloom.opacity = roundParam(rng.range(0.22, 0.45))
+    bloom.blendMode = rng.bool(0.65) ? 'screen' : 'normal'
+    bloom.params = {
+      ...bloom.params,
+      threshold: roundParam(rng.range(0.45, 0.72)),
+      amount: roundParam(rng.range(0.2, 0.65)),
+      radius: rng.int(6, 24),
+      palette: [rng.pick(palette)],
+      tint: roundParam(rng.range(0.2, 0.75)),
     }
 
+    /**
+     * The type rides above the damage, with only the bloom over it.
+     *
+     * Sorting and drifting the words along with the field is the obvious
+     * reading of "one stack" and it is unreadable — a pixel sort with a 150px
+     * run turns letterforms into streaks, and that is what the app opened on.
+     * Compositing the text after those passes leaves the field wrecked and the
+     * words intact, which is the look the layer is for.
+     *
+     * Bloom is the exception, and the reason it is no longer optional here: it
+     * bleeds light rather than moving pixels, so it glows the type instead of
+     * destroying it, and it is what ties crisp text back into a damaged frame.
+     */
     const kept = current.layers.filter(
       (layer) => isSourceLayer(layer) || layer.locked,
     )
-    return { ...current, layers: withGeneratedNames([...kept, ...textFx]) }
+    const text = kept.filter((layer) => layer.kind === 'text')
+    const beneath = kept.filter((layer) => layer.kind !== 'text')
+
+    return {
+      ...current,
+      layers: withGeneratedNames([...beneath, ...textFx, ...text, bloom]),
+    }
   }
 
   const layers: Array<EffectLayer> = []

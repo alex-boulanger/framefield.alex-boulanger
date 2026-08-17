@@ -29,7 +29,6 @@ src/
     noise.ts    gradient noise, fBm, ridged, domain warp, curl, LIC
     masks.ts    Bayer + void-and-cluster blue-noise threshold masks
     glyphAtlas.ts  rasterizes a ramp and measures each glyph's ink
-    presets.ts  curated recipes, rendered live as thumbnails
     generators/ field source (fBm / warp / ridge / flow / cells / moiré /
                 ramp + SDF shapes), with pan and rotate placement
     effects/    levels, posterize, gradient-map, pixelate, dither, halftone,
@@ -145,12 +144,11 @@ Several of these exist because they caught real bugs:
   high-passed white noise and ranked the residual, which sounds right and does
   essentially nothing: local density variance came out within 2% of plain white
   noise. Void-and-cluster replaced it.
-- **Every preset renders to something worth looking at.** Not blank, not blown
-  out, and with real tonal range. This caught two things at once: presets
-  silently losing their palette to the effect defaults, and Low-res collapsing
-  to a single flat colour at thumbnail size because a 12px pixelate cell is a
-  quarter of a 52px thumbnail. Thumbnails now render as true miniatures — full
-  canvas, scaled down — which is what the export-space param convention is for.
+- **A thumbnail is a true miniature, not a small render.** Building a recipe at
+  thumbnail dimensions leaves spatial params at export scale — a 12px pixelate
+  cell is a quarter of a 52px thumbnail — and a chunky stack collapses to one
+  flat colour. Thumbnails go through `scale` instead, full canvas scaled down,
+  which is what the export-space param convention is for.
 
 The scale-fidelity block in `renderRecipe.test.ts` pins the decision the param
 model rests on, and includes a sensitivity check that fails if scaling ever
@@ -180,8 +178,8 @@ Shipped: fifteen effects — levels, posterize, gradient map, pixelate, dither,
 halftone, ASCII, pixel sort, contour, blur/sharpen, transform, displace,
 channel drift, bloom, grain — plus per-layer opacity, blend modes, **tone and
 shape masks**, layer locks, drag-to-reorder, image import, a live variation
-grid, curated and saved presets, undo/redo, remix and randomize-FX, share URLs,
-PNG export at size presets, and the Web Worker render path.
+grid, saved presets, undo/redo, remix and randomize-FX, share URLs, PNG export
+at size presets, and the Web Worker render path.
 
 Two masks per layer, and they multiply. The tone mask asks _which tones_; the
 shape mask asks _which part of the frame_, as a linear or radial field banded
@@ -231,9 +229,10 @@ curl field onto a grid instead of evaluating four `fbm` per step, a gradient
 lookup table instead of `cos`/`sin` per lattice corner, and reduced octaves on
 the warp displacement lookups.
 
-Whole presets, cold, at preview scale: Terminal 79ms, Engrave 103ms, Shred
-117ms, Silk 183ms, Newsprint 244ms, Low-res 258ms, Marble 304ms, Riso 317ms,
-Drip 366ms.
+Whole stacks, cold, at preview scale ran 79–366ms across the curated presets,
+which have since been removed — the shape of the number is the useful part: a
+cold stack is dominated by its field, and everything above it is cheap by
+comparison.
 
 Sources are memoized behind the checkpoint cache, so these are paid on source
 edits and first paint, not on effect-slider drags.
